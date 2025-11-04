@@ -53,6 +53,8 @@ func main() {
 			"err", err)
 	}
 
+	go srv.Cleaner(ctx, cfg.Antizapret.Cache.ClearInterval)
+
 	dns.HandleFunc(".", srv.DNS.DNSHandler)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Antizapret.Listen.Address, cfg.Antizapret.Listen.Port)

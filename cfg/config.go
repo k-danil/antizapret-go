@@ -26,8 +26,9 @@ type AntizapretConfig struct {
 	Upstream Upstream `yaml:"upstream"`
 	FakeCIDR string   `yaml:"fake_cidr"`
 	Cache    struct {
-		Capacity int           `yaml:"capacity"`
-		TTL      time.Duration `yaml:"ttl"`
+		ClearInterval time.Duration `yaml:"clear_interval"`
+		Capacity      int           `yaml:"capacity"`
+		TTL           time.Duration `yaml:"ttl"`
 	} `yaml:"cache"`
 	Nft             Nft    `yaml:"nft"`
 	LoggingSeverity string `yaml:"logging_severity"`
@@ -44,6 +45,7 @@ upstream:
   timeout: 5s
 fake_cidr: "10.30.0.0/15"
 cache:
+  clear_interval: 1m
   capacity: 20000
   ttl: 5m
 nft:

@@ -1,6 +1,7 @@
 package mapper
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -48,4 +49,20 @@ func (m *IPMapper) Map(real net.IP, host string) (net.IP, error) {
 		return nil, err
 	}
 	return utils.Uint32ToIP(fakeUint), nil
+}
+
+func (m *IPMapper) Clean() (err error) {
+	res := m.used.Clean()
+
+	var errs []error
+	for _, pair := range res {
+		if err = m.nft.Delete(utils.Uint32ToIP(pair.Key), utils.Uint32ToIP(pair.Value)); err != nil {
+			errs = append(errs, err)
+		}
+		m.free.EnqueueHead(pair.Value)
+	}
+	if len(errs) > 0 {
+		err = errors.Join(errs...)
+	}
+	return
 }

@@ -70,7 +70,7 @@ func (d *DNSHandler) DNSHandler(ctx context.Context, w dns.ResponseWriter, r *dn
 			resp.Answer = make([]dns.RR, 0, len(newAnswer))
 			for _, ans := range newAnswer {
 				var fake net.IP
-				if fake, err = d.Mapper.Map(ans.A, ans.Hdr.Name); err != nil {
+				if fake, err = d.ipMapper.Map(ans.A, ans.Hdr.Name); err != nil {
 					log.L.Errorw("map failed", "err", err)
 					r.Rcode = dns.RcodeServerFailure
 					_, _ = r.WriteTo(w)
