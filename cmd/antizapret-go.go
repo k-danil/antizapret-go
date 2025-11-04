@@ -53,7 +53,7 @@ func main() {
 			"err", err)
 	}
 
-	dns.HandleFunc("miek.nl.", srv.DNS.DNSHandler)
+	dns.HandleFunc(".", srv.DNS.DNSHandler)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Antizapret.Listen.Address, cfg.Antizapret.Listen.Port)
 	dnsServer := &dns.Server{Addr: addr, Net: cfg.Antizapret.Listen.Protocol, ReusePort: true, MaxTCPQueries: -1}

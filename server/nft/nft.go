@@ -35,11 +35,11 @@ func NewNftManager(chainName, setName string) (m *Manager, err error) {
 	if chain, err = m.initializeChain(chainName, table); err != nil {
 		return nil, fmt.Errorf("failed to initialize chain: %w", err)
 	}
-	if err = m.initializeRule(setName, table, chain); err != nil {
-		return nil, fmt.Errorf("failed to initialize rule: %w", err)
-	}
 	if m.set, err = m.initializeSet(setName, table); err != nil {
 		return nil, fmt.Errorf("failed to initialize set: %w", err)
+	}
+	if err = m.initializeRule(setName, table, chain); err != nil {
+		return nil, fmt.Errorf("failed to initialize rule: %w", err)
 	}
 
 	return
@@ -95,8 +95,9 @@ func (m *Manager) ListSet() (vals []nftables.SetElement, err error) {
 }
 
 func (m *Manager) initializeChain(name string, t *nftables.Table) (chain *nftables.Chain, err error) {
-	chain, _ = m.conn.ListChain(t, name)
-	if chain != nil {
+	var errTemp error
+	chain, errTemp = m.conn.ListChain(t, name)
+	if errTemp != nil {
 		chain = m.conn.AddChain(&nftables.Chain{
 			Name:  name,
 			Table: t,

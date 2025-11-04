@@ -47,8 +47,8 @@ cache:
   capacity: 20000
   ttl: 5m
 nft:
-  set: "antizapret_mapping"
-  chain: "antizapret" 
+  set: "ANTIZAPRET_SET"
+  chain: "ANTIZAPRET_CHAIN" 
 logging_severity: "debug"`
 
 func ReadConfig(configFilename string) error {
