@@ -1,0 +1,15 @@
+listen:
+  address: "127.0.0.1"
+  protocol: "udp"
+  port: 53
+upstream:
+  address: "8.8.8.8:53"
+  timeout: 5s
+fake_cidr: "10.30.0.0/15"
+cache:
+  capacity: 20000
+  ttl: 5m
+nft:
+  set: "antizapret_mapping"
+  chain: "antizapret"
+logging_severity: "debug"
