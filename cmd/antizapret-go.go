@@ -52,6 +52,7 @@ func main() {
 		log.L.Fatalw("Error creating server",
 			"err", err)
 	}
+	defer func() { _ = srv.Close() }()
 
 	go srv.Cleaner(ctx, cfg.Antizapret.Cache.ClearInterval)
 

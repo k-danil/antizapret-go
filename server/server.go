@@ -50,3 +50,7 @@ func (s *Server) Cleaner(ctx context.Context, interval time.Duration) {
 		}
 	}
 }
+
+func (s *Server) Close() error {
+	return s.nftManager.Close()
+}

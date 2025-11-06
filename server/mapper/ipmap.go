@@ -11,7 +11,7 @@ import (
 )
 
 type IPMapper struct {
-	used *utils.SafeMap[uint32, uint32]
+	used *utils.SafeTTLMap[uint32, uint32]
 	free *utils.SafeQueue[uint32]
 
 	nft *nft.Manager
@@ -25,7 +25,7 @@ func NewIPMapper(cidr string, capacity int, ttl time.Duration, nft *nft.Manager)
 	}
 
 	m = &IPMapper{
-		used: utils.NewMap[uint32, uint32](capacity, ttl),
+		used: utils.NewTTLMap[uint32, uint32](capacity, ttl),
 		free: utils.NewQueue[uint32](),
 		nft:  nft,
 	}

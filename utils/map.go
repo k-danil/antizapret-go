@@ -15,20 +15,20 @@ type Pair[K comparable, V any] struct {
 	Value V
 }
 
-type SafeMap[K comparable, V any] struct {
+type SafeTTLMap[K comparable, V any] struct {
 	m   map[K]MapEntry[V]
 	ttl time.Duration
 	mx  sync.Mutex
 }
 
-func NewMap[K comparable, V any](capacity int, ttl time.Duration) *SafeMap[K, V] {
-	return &SafeMap[K, V]{
+func NewTTLMap[K comparable, V any](capacity int, ttl time.Duration) *SafeTTLMap[K, V] {
+	return &SafeTTLMap[K, V]{
 		m:   make(map[K]MapEntry[V], capacity),
 		ttl: ttl,
 	}
 }
 
-func (m *SafeMap[K, V]) Get(k K) (V, bool) {
+func (m *SafeTTLMap[K, V]) Get(k K) (V, bool) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 	v, ok := m.m[k]
@@ -38,13 +38,13 @@ func (m *SafeMap[K, V]) Get(k K) (V, bool) {
 	return v.Value, ok
 }
 
-func (m *SafeMap[K, V]) Set(k K, v V) {
+func (m *SafeTTLMap[K, V]) Set(k K, v V) {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 	m.m[k] = MapEntry[V]{Value: v, accessTime: time.Now()}
 }
 
-func (m *SafeMap[K, V]) Clean() []Pair[K, V] {
+func (m *SafeTTLMap[K, V]) Clean() []Pair[K, V] {
 	m.mx.Lock()
 	defer m.mx.Unlock()
 	var res []Pair[K, V]

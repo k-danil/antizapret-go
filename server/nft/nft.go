@@ -3,6 +3,7 @@ package nft
 import (
 	"fmt"
 	"net"
+	"syscall"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
@@ -38,7 +39,7 @@ func NewNftManager(chainName, setName string) (m *Manager, err error) {
 	if m.set, err = m.initializeSet(setName, table); err != nil {
 		return nil, fmt.Errorf("failed to initialize set: %w", err)
 	}
-	if err = m.initializeRule(setName, table, chain); err != nil {
+	if err = m.initializeRule(table, chain); err != nil {
 		return nil, fmt.Errorf("failed to initialize rule: %w", err)
 	}
 
@@ -56,7 +57,6 @@ func (m *Manager) Add(srcIP, dstIP net.IP, comment string) (err error) {
 		{
 			Key:     srcIP.To4(),
 			Val:     dstIP.To4(),
-			Counter: &expr.Counter{},
 			Comment: comment,
 		},
 	}); err != nil {
@@ -90,17 +90,16 @@ func (m *Manager) Delete(srcIP, dstIP net.IP) (err error) {
 	return
 }
 
-func (m *Manager) ListSet() (vals []nftables.SetElement, err error) {
-	return m.conn.GetSetElements(m.set)
-}
-
 func (m *Manager) initializeChain(name string, t *nftables.Table) (chain *nftables.Chain, err error) {
 	var errTemp error
 	chain, errTemp = m.conn.ListChain(t, name)
 	if errTemp != nil {
 		chain = m.conn.AddChain(&nftables.Chain{
-			Name:  name,
-			Table: t,
+			Name:     name,
+			Table:    t,
+			Type:     nftables.ChainTypeNAT,
+			Hooknum:  nftables.ChainHookPrerouting,
+			Priority: nftables.ChainPriorityFilter,
 		})
 		if err = m.conn.Flush(); err != nil {
 			return
@@ -109,7 +108,7 @@ func (m *Manager) initializeChain(name string, t *nftables.Table) (chain *nftabl
 	return
 }
 
-func (m *Manager) initializeRule(setName string, t *nftables.Table, c *nftables.Chain) (err error) {
+func (m *Manager) initializeRule(t *nftables.Table, c *nftables.Chain) (err error) {
 	r, _ := m.conn.GetRules(t, c)
 	var exists bool
 	for _, rule := range r {
@@ -126,36 +125,24 @@ func (m *Manager) initializeRule(setName string, t *nftables.Table, c *nftables.
 			Exprs: []expr.Any{
 				&expr.Counter{},
 				&expr.Payload{
-					OperationType:  0x0,
-					DestRegister:   0x1,
-					SourceRegister: 0x0,
-					Base:           0x1,
-					Offset:         0x10,
-					Len:            0x4,
-					CsumType:       0x0,
-					CsumOffset:     0x0,
-					CsumFlags:      0x0,
+					OperationType: expr.PayloadLoad,
+					DestRegister:  1,
+					Base:          expr.PayloadBaseNetworkHeader,
+					Offset:        16,
+					Len:           4,
 				},
 				&expr.Lookup{
-					SourceRegister: 0x1,
-					DestRegister:   0x1,
+					SourceRegister: 1,
+					DestRegister:   1,
 					IsDestRegSet:   true,
-					SetID:          0x0,
-					SetName:        setName,
-					Invert:         false,
+					SetID:          m.set.ID,
+					SetName:        m.set.Name,
 				},
 				&expr.NAT{
-					Type:        0x1,
-					Family:      0x2,
-					RegAddrMin:  0x1,
-					RegAddrMax:  0x1,
-					RegProtoMin: 0x0,
-					RegProtoMax: 0x0,
-					Random:      false,
-					FullyRandom: false,
-					Persistent:  false,
-					Prefix:      false,
-					Specified:   false,
+					Type:       expr.NATTypeDestNAT,
+					Family:     syscall.AF_INET,
+					RegAddrMin: 1,
+					RegAddrMax: 1,
 				},
 			},
 		})
