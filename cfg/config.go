@@ -7,8 +7,8 @@ import (
 const ServiceName = `antizapret-go`
 
 type Upstream struct {
-	Address string        `yaml:"address"`
-	Network string        `yaml:"network"`
+	Name    string        `yaml:"name"`
+	DSN     string        `yaml:"dsn"`
 	Timeout time.Duration `yaml:"timeout"`
 }
 
@@ -17,15 +17,36 @@ type Nft struct {
 	Chain string `yaml:"chain"`
 }
 
+type RouterType string
+
+const (
+	RouterTypeBlackhole   RouterType = "blackhole"
+	RouterTypeRemap       RouterType = "remap"
+	RouterTypePassthrough RouterType = "passthrough"
+)
+
+type Router struct {
+	Name   string     `yaml:"name"`
+	Type   RouterType `yaml:"type"`
+	Source string     `yaml:"source"`
+	Regexp *Regexp    `yaml:"regexp,omitempty"`
+}
+
+type Regexp struct {
+	From string `yaml:"from"`
+	To   string `yaml:"to"`
+}
+
 type AntizapretConfig struct {
 	Listen struct {
 		Address  string `yaml:"address"`
 		Protocol string `yaml:"protocol"`
 		Port     int    `yaml:"port"`
 	} `yaml:"listen"`
-	Upstream Upstream `yaml:"upstream"`
-	FakeCIDR string   `yaml:"fake_cidr"`
-	Cache    struct {
+	Upstreams []Upstream `yaml:"upstreams"`
+	Routers   []Router   `yaml:"routers"`
+	FakeCIDR  string     `yaml:"fake_cidr"`
+	Cache     struct {
 		ClearInterval time.Duration `yaml:"clear_interval"`
 		Capacity      int           `yaml:"capacity"`
 		TTL           time.Duration `yaml:"ttl"`
@@ -41,7 +62,7 @@ const AntizapretDefaultConfig = `listen:
   protocol: "udp"
   port: 53
 upstream:
-  address: "8.8.8.8:53"
+  address: "udp://8.8.8.8:53"
   timeout: 5s
 fake_cidr: "10.30.0.0/15"
 cache:

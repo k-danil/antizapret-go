@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/jellydator/ttlcache/v3 v3.4.0 // indirect
 	github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42 // indirect
 	github.com/mdlayher/socket v0.5.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

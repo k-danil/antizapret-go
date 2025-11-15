@@ -42,10 +42,11 @@ func (d *DNSHandler) DNSHandler(ctx context.Context, w dns.ResponseWriter, r *dn
 	ctx, cancel = context.WithTimeout(ctx, d.timeout)
 	defer cancel()
 
-	log.L.Debugw("received request", "msg", r)
-
 	if err := r.Unpack(); err != nil {
 		log.L.Warnw("unpack request failed", "err", err)
+		r.Rcode = dns.RcodeFormatError
+		_, _ = r.WriteTo(w)
+		return
 	}
 
 	resp, _, err := d.client.ExchangeWithConn(ctx, r, d.upstream)
