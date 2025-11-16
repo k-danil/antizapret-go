@@ -10,6 +10,11 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 )
 
+const (
+	DefaultTTL      = time.Duration(0)
+	MinCacheableTTL = time.Second * 5
+)
+
 type Cache struct {
 	cache *ttlcache.Cache[string, *dns.Msg]
 }
@@ -40,7 +45,12 @@ func (c *Cache) GetResponse(req *dns.Msg) (resp *dns.Msg) {
 		return
 	}
 
-	ttl := uint32(item.ExpiresAt().Sub(time.Now()).Seconds())
+	itemTTL := item.ExpiresAt().Sub(time.Now())
+	if itemTTL < MinCacheableTTL {
+		return
+	}
+
+	ttl := uint32(itemTTL.Seconds())
 	resp = item.Value().Copy()
 	resp.ID = req.ID
 
@@ -70,8 +80,6 @@ func (c *Cache) GetResponseLambda(req *dns.Msg, lambda func() (*dns.Msg, time.Du
 	return
 }
 
-const DefaultTTL = time.Duration(0)
-
 func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 	l := len(req.Question)
 	if l == 0 || l > 1 {
@@ -88,6 +96,10 @@ func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 		ttl = time.Duration(ttlUint) * time.Second
 	}
 
+	if ttl < MinCacheableTTL {
+		return
+	}
+
 	settable := resp.Copy()
 	settable.Data = nil
 
@@ -96,4 +108,9 @@ func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 
 func (c *Cache) calculateCacheKey(req *dns.Msg) string {
 	return fmt.Sprintf("%s-%s", req.Question[0].Header().Name, reflect.TypeOf(req.Question[0]))
+}
+
+func (c *Cache) Close() error {
+	c.cache.Stop()
+	return nil
 }

@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -31,7 +32,7 @@ func NewResolver(config []cfg.Upstream) (r *Resolver, err error) {
 				return
 			}
 		default:
-			err = errors.New("unsupported protocol")
+			err = fmt.Errorf("unsupported protocol `%s` for upstream `%s`", u.DSN, u.Name)
 			return
 		}
 
@@ -46,22 +47,11 @@ func NewResolver(config []cfg.Upstream) (r *Resolver, err error) {
 }
 
 func (r *Resolver) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
+	if len(r.upstreams) == 0 {
+		err = errors.New("no upstreams")
+		return
+	}
 	now := time.Now()
 	index := now.Nanosecond() % len(r.upstreams)
 	return r.upstreams[index].Resolve(ctx, req)
-}
-
-func (r *Resolver) Close() (err error) {
-	var errs []error
-	for _, u := range r.upstreams {
-		err = u.Close()
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(errs) != 0 {
-		err = errors.Join(errs...)
-	}
-
-	return
 }

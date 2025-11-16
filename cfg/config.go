@@ -86,7 +86,6 @@ policy:
         to: ".$1"
 fake_cidr: "10.30.0.0/15"
 cache:
-  clear_interval: 1m
   capacity: 20000
   ttl: 24h
 nft:

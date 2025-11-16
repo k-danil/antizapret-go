@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"os"
 	"time"
 
@@ -15,10 +16,14 @@ import (
 )
 
 type Server struct {
+	resolver   *resolver.Resolver
 	ipMapper   *mapper.IPMapper
 	nftManager *nft.Manager
 	router     *rtr.Router
-	DNS        *DNSHandler
+	cache      *cache.Cache
+
+	timeout time.Duration
+	ipv6    bool
 }
 
 func NewServer(cfg cfg.AntizapretConfig) (s *Server, err error) {
@@ -32,20 +37,18 @@ func NewServer(cfg cfg.AntizapretConfig) (s *Server, err error) {
 		return
 	}
 
-	var res *resolver.Resolver
-	if res, err = resolver.NewResolver(cfg.Upstreams); err != nil {
+	if s.resolver, err = resolver.NewResolver(cfg.Upstreams); err != nil {
 		return
 	}
 
-	c := cache.NewCache(uint64(cfg.Cache.Capacity), cfg.Cache.TTL)
+	s.cache = cache.NewCache(uint64(cfg.Cache.Capacity), cfg.Cache.TTL)
 
 	s.router = rtr.NewRouter(cfg.Policy.Matchers)
-
 	if err := s.router.Rebuild(context.Background()); err != nil {
 		log.L.Errorw("failed to rebuild router", "err", err)
 	}
 
-	s.DNS, err = NewDNSHandler(s, res, c, cfg.RequestTimeout)
+	s.timeout = cfg.RequestTimeout
 
 	return s, err
 }
@@ -87,6 +90,18 @@ func (s *Server) NFTCleaner(ctx context.Context, interval time.Duration) {
 	}
 }
 
-func (s *Server) Close() error {
-	return s.nftManager.Close()
+func (s *Server) Close() (err error) {
+	var errS []error
+	if err := s.cache.Close(); err != nil {
+		errS = append(errS, err)
+	}
+	if err := s.nftManager.Close(); err != nil {
+		errS = append(errS, err)
+	}
+
+	if len(errS) > 0 {
+		err = errors.Join(errS...)
+	}
+
+	return
 }

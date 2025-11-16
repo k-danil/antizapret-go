@@ -129,6 +129,8 @@ func (r *Router) Rebuild(ctx context.Context) error {
 				if line != "" {
 					radix.Insert(line, s.Action, match)
 					length++
+				} else {
+					log.L.Warnw("skipped line in source", "line", scanner.Text(), "source", s.Name)
 				}
 			}
 			err = scanner.Err()

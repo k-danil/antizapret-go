@@ -58,20 +58,21 @@ func main() {
 
 	go func() {
 		sig := make(chan os.Signal, 1)
-		defer close(sig)
 		signal.Notify(sig, syscall.SIGHUP)
+		defer signal.Stop(sig)
 		srv.PolicyRebuilder(ctx, cfg.Antizapret.Policy.ReloadInterval, sig)
 	}()
 
-	dns.HandleFunc(".", srv.DNS.DNSHandler)
+	dns.HandleFunc(".", srv.DNSHandler)
 
 	var servers []*dns.Server
 	for _, u := range cfg.Antizapret.Bindings {
 		addr := fmt.Sprintf("%s:%d", u.Address, u.Port)
-		dnsServer := &dns.Server{Addr: addr, Net: u.Protocol, ReusePort: true, MaxTCPQueries: -1}
+		protocol := u.Protocol
+		dnsServer := &dns.Server{Addr: addr, Net: protocol, ReusePort: true, MaxTCPQueries: -1}
 		go func() {
-			if err = dnsServer.ListenAndServe(); err != nil {
-				log.L.Fatalw("Error starting DNS server", "addr", addr, "protocol", u.Protocol, "err", err)
+			if err := dnsServer.ListenAndServe(); err != nil {
+				log.L.Fatalw("Error starting DNS server", "addr", addr, "protocol", protocol, "err", err)
 			}
 		}()
 		servers = append(servers, dnsServer)

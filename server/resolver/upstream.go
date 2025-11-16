@@ -3,8 +3,6 @@ package resolver
 import (
 	"context"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,18 +14,16 @@ import (
 
 type Upstream interface {
 	Resolve(ctx context.Context, req *dns.Msg) (*dns.Msg, error)
-	io.Closer
 }
 
 type ClassicUpstream struct {
-	name   string
-	client *dns.Client
-	conn   net.Conn
+	name         string
+	client       *dns.Client
+	schema, host string
+	timeout      time.Duration
 }
 
 func NewClassicUpstream(name, dsn string, timeout time.Duration) (r *ClassicUpstream, err error) {
-	r = new(ClassicUpstream)
-
 	var details *url.URL
 	details, err = url.Parse(dsn)
 	if err != nil {
@@ -35,32 +31,27 @@ func NewClassicUpstream(name, dsn string, timeout time.Duration) (r *ClassicUpst
 		return
 	}
 
-	if name == "" {
-		name = details.Host
+	r = &ClassicUpstream{
+		name:    name,
+		schema:  details.Scheme,
+		host:    details.Host,
+		timeout: timeout,
+		client:  dns.NewClient(),
 	}
-	r.name = name
 
-	if !strings.Contains(details.Host, ":") {
-		details.Host = fmt.Sprintf("%s:53", details.Host)
+	if !strings.Contains(r.host, ":") {
+		r.host = fmt.Sprintf("%s:53", r.host)
 	}
 
-	if r.conn, err = net.DialTimeout(details.Scheme, details.Host, timeout); err != nil {
-		err = fmt.Errorf("failed connecting to upstream `%s`: %w", r.name, err)
-		return
+	if r.name == "" {
+		r.name = r.host
 	}
-	r.client = dns.NewClient()
 
 	return
 }
 
 func (r *ClassicUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
-	if err = req.Unpack(); err != nil {
-		req.Rcode = dns.RcodeFormatError
-		err = fmt.Errorf("failed to unpack request: %w", err)
-		return req, err
-	}
-
-	resp, _, err = r.client.ExchangeWithConn(ctx, req, r.conn)
+	resp, _, err = r.client.Exchange(ctx, req, r.schema, r.host)
 	if err != nil || resp == nil {
 		req.Rcode = dns.RcodeServerFailure
 		err = fmt.Errorf("upstream `%s` failed: %w", r.name, err)
@@ -68,10 +59,6 @@ func (r *ClassicUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.
 	}
 
 	return
-}
-
-func (r *ClassicUpstream) Close() error {
-	return r.conn.Close()
 }
 
 type DoHUpstream struct {
@@ -85,12 +72,6 @@ func NewDoHUpstream(name, dsn string, timeout time.Duration) (r *DoHUpstream, er
 }
 
 func (r *DoHUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
-	if err = req.Unpack(); err != nil {
-		req.Rcode = dns.RcodeFormatError
-		err = fmt.Errorf("failed to unpack request: %w", err)
-		return req, err
-	}
-
 	var hreq *http.Request
 	if hreq, err = dnshttp.NewRequest(http.MethodPost, r.url, req); err != nil {
 		req.Rcode = dns.RcodeFormatError
@@ -112,8 +93,4 @@ func (r *DoHUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg,
 	}
 
 	return
-}
-
-func (r *DoHUpstream) Close() error {
-	return nil
 }
