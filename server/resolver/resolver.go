@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	"codeberg.org/miekg/dns"
 	"github.com/antizapret-vpn/go-proxy/cfg"
@@ -20,12 +21,12 @@ type Uplink struct {
 }
 
 type Resolver struct {
-	uplinks []Uplink
+	uplinks []*Uplink
 }
 
 func NewResolver(config []cfg.Upstream) (r *Resolver, err error) {
 	r = &Resolver{
-		uplinks: make([]Uplink, 0, len(config)),
+		uplinks: make([]*Uplink, 0, len(config)),
 	}
 
 	for _, u := range config {
@@ -59,7 +60,7 @@ func NewResolver(config []cfg.Upstream) (r *Resolver, err error) {
 
 		tempUplink.client = dns.NewClient()
 
-		r.uplinks = append(r.uplinks, tempUplink)
+		r.uplinks = append(r.uplinks, &tempUplink)
 	}
 
 	if len(r.uplinks) == 0 {
@@ -69,9 +70,10 @@ func NewResolver(config []cfg.Upstream) (r *Resolver, err error) {
 	return
 }
 
-// TODO implement failover and load balancing
 func (r *Resolver) selectUplink() (uplink *Uplink) {
-	return &r.uplinks[0]
+	now := time.Now()
+	index := now.Nanosecond() % len(r.uplinks)
+	return r.uplinks[index]
 }
 
 func (r *Resolver) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {

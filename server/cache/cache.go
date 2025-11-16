@@ -53,22 +53,45 @@ func (c *Cache) GetResponse(req *dns.Msg) (resp *dns.Msg) {
 	return
 }
 
-func (c *Cache) SetResponse(req, resp *dns.Msg) {
+func (c *Cache) GetResponseLambda(req *dns.Msg, lambda func() (*dns.Msg, time.Duration, error)) (resp *dns.Msg) {
+	resp = c.GetResponse(req)
+	if resp != nil {
+		return
+	}
+
+	var ttl time.Duration
+	var err error
+	resp, ttl, err = lambda()
+	if err != nil {
+		return
+	}
+
+	c.SetResponse(req, resp, ttl)
+	return
+}
+
+const DefaultTTL = time.Duration(0)
+
+func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 	l := len(req.Question)
 	if l == 0 || l > 1 {
 		return
 	}
 
-	key := c.calculateCacheKey(req)
-	ttl := uint32(math.MaxUint32)
-	for _, rr := range [][]dns.RR{resp.Answer, resp.Ns, resp.Extra} {
-		for _, a := range rr {
-			ttl = min(ttl, a.Header().TTL)
+	if ttl == DefaultTTL {
+		ttlUint := uint32(math.MaxUint32)
+		for _, rr := range [][]dns.RR{resp.Answer, resp.Ns, resp.Extra} {
+			for _, a := range rr {
+				ttlUint = min(ttlUint, a.Header().TTL)
+			}
 		}
+		ttl = time.Duration(ttlUint) * time.Second
 	}
 
-	c.cache.Set(key, resp.Copy(), time.Duration(ttl)*time.Second)
-	return
+	settable := resp.Copy()
+	settable.Data = nil
+
+	c.cache.Set(c.calculateCacheKey(req), settable, ttl)
 }
 
 func (c *Cache) calculateCacheKey(req *dns.Msg) string {

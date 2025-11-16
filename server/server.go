@@ -2,40 +2,76 @@ package server
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/antizapret-vpn/go-proxy/cfg"
 	"github.com/antizapret-vpn/go-proxy/log"
+	"github.com/antizapret-vpn/go-proxy/server/cache"
 	"github.com/antizapret-vpn/go-proxy/server/mapper"
 	"github.com/antizapret-vpn/go-proxy/server/nft"
+	"github.com/antizapret-vpn/go-proxy/server/resolver"
+	rtr "github.com/antizapret-vpn/go-proxy/server/router"
 )
 
 type Server struct {
 	ipMapper   *mapper.IPMapper
 	nftManager *nft.Manager
+	router     *rtr.Router
 	DNS        *DNSHandler
 }
 
 func NewServer(cfg cfg.AntizapretConfig) (s *Server, err error) {
-	var nftManager *nft.Manager
-	if nftManager, err = nft.NewNftManager(cfg.Nft.Chain, cfg.Nft.Set); err != nil {
-		return nil, err
+	s = new(Server)
+
+	if s.nftManager, err = nft.NewNftManager(cfg.NFT.Chain, cfg.NFT.Set); err != nil {
+		return
 	}
 
-	var ipMapper *mapper.IPMapper
-	if ipMapper, err = mapper.NewIPMapper(cfg.FakeCIDR, cfg.Cache.Capacity, cfg.Cache.TTL, nftManager); err != nil {
-		return nil, err
+	if s.ipMapper, err = mapper.NewIPMapper(cfg.FakeCIDR, cfg.NFT.TTL, s.nftManager); err != nil {
+		return
 	}
-	s = &Server{
-		ipMapper:   ipMapper,
-		nftManager: nftManager,
+
+	var res *resolver.Resolver
+	if res, err = resolver.NewResolver(cfg.Upstreams); err != nil {
+		return
 	}
-	s.DNS, err = NewDNSHandler(s, cfg.Upstream.Address, cfg.Upstream.Timeout, cfg.Cache.TTL)
+
+	c := cache.NewCache(uint64(cfg.Cache.Capacity), cfg.Cache.TTL)
+
+	s.router = rtr.NewRouter(cfg.Policy.Matchers)
+
+	if err := s.router.Rebuild(context.Background()); err != nil {
+		log.L.Errorw("failed to rebuild router", "err", err)
+	}
+
+	s.DNS, err = NewDNSHandler(s, res, c, cfg.RequestTimeout)
 
 	return s, err
 }
 
-func (s *Server) Cleaner(ctx context.Context, interval time.Duration) {
+func (s *Server) PolicyRebuilder(ctx context.Context, interval time.Duration, reload <-chan os.Signal) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-reload:
+			log.L.Infow("reloading router")
+			if err := s.router.Rebuild(ctx); err != nil {
+				log.L.Errorw("failed to rebuild router", "err", err)
+			}
+		case <-ticker.C:
+			if err := s.router.Rebuild(ctx); err != nil {
+				log.L.Errorw("failed to rebuild router", "err", err)
+			}
+		}
+	}
+}
+
+func (s *Server) NFTCleaner(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

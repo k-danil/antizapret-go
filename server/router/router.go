@@ -21,8 +21,7 @@ import (
 type Router struct {
 	sources []Source
 
-	period time.Duration
-	r      atomic.Pointer[utils.Radix[Action]]
+	r atomic.Pointer[utils.Radix[Action]]
 }
 
 type Regexp struct {
@@ -37,7 +36,7 @@ type Source struct {
 	Regexp *Regexp
 }
 
-func (s *Source) GetReader() (r io.ReadCloser, err error) {
+func (s *Source) GetReader(ctx context.Context) (r io.ReadCloser, err error) {
 	var uri *url.URL
 	if uri, err = url.Parse(s.URI); err != nil {
 		err = fmt.Errorf("failed to parse uri `%s` source `%s`: %w", s.URI, s.Name, err)
@@ -51,9 +50,6 @@ func (s *Source) GetReader() (r io.ReadCloser, err error) {
 			return
 		}
 	case "http", "https":
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-		defer cancel()
-
 		var req *http.Request
 		if req, err = http.NewRequestWithContext(ctx, http.MethodGet, uri.String(), nil); err != nil {
 			err = fmt.Errorf("failed to create request for source `%s`: %w", s.Name, err)
@@ -80,7 +76,7 @@ const (
 	ActionPass
 )
 
-func NewRouter(routers []cfg.Router) (r *Router, err error) {
+func NewRouter(routers []cfg.Matcher) (r *Router) {
 	sources := make([]Source, 0, len(routers))
 	for _, rtr := range routers {
 		s := Source{
@@ -111,13 +107,18 @@ func NewRouter(routers []cfg.Router) (r *Router, err error) {
 	return
 }
 
-func (r *Router) rebuild() error {
+func (r *Router) Rebuild(ctx context.Context) error {
 	radix := utils.NewRadix[Action]()
 
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	var length int
 	for _, s := range r.sources {
 		err := func(s Source) (err error) {
 			var rdr io.ReadCloser
-			if rdr, err = s.GetReader(); err != nil {
+			if rdr, err = s.GetReader(ctx); err != nil {
 				err = fmt.Errorf("failed to get reader for source `%s`: %w", s.Name, err)
 				return
 			}
@@ -127,6 +128,7 @@ func (r *Router) rebuild() error {
 				line, match := r.processLine(scanner.Text(), s.Regexp)
 				if line != "" {
 					radix.Insert(line, s.Action, match)
+					length++
 				}
 			}
 			err = scanner.Err()
@@ -141,29 +143,10 @@ func (r *Router) rebuild() error {
 		}
 	}
 
+	log.L.Infow("router rebuilt", "length", length)
 	r.r.Store(radix)
 
 	return nil
-}
-
-func (r *Router) Rebuilder(ctx context.Context, reload <-chan struct{}) {
-	ticker := time.NewTicker(r.period)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-reload:
-			log.L.Infow("reloading router")
-			if err := r.rebuild(); err != nil {
-				log.L.Errorw("failed to rebuild router", "err", err)
-			}
-		case <-ticker.C:
-			if err := r.rebuild(); err != nil {
-				log.L.Errorw("failed to rebuild router", "err", err)
-			}
-		}
-	}
 }
 
 func (r *Router) Lookup(domain string) (action Action) {
@@ -189,7 +172,7 @@ func (r *Router) processLine(line string, regexp *Regexp) (domain string, match 
 	} else {
 		match = utils.MatchExact
 	}
-	line = utils.NormalizeDomain(line)
+	domain = utils.NormalizeDomain(line)
 
 	return
 }

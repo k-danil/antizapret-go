@@ -14,10 +14,12 @@ type IPMapper struct {
 	used *utils.SafeTTLMap[uint32, uint32]
 	free *utils.SafeQueue[uint32]
 
+	ttl time.Duration
+
 	nft *nft.Manager
 }
 
-func NewIPMapper(cidr string, capacity int, ttl time.Duration, nft *nft.Manager) (m *IPMapper, err error) {
+func NewIPMapper(cidr string, ttl time.Duration, nft *nft.Manager) (m *IPMapper, err error) {
 	var ipnet *net.IPNet
 	if _, ipnet, err = net.ParseCIDR(cidr); err != nil {
 		err = fmt.Errorf("failed to parse CIDR: %w", err)
@@ -25,8 +27,9 @@ func NewIPMapper(cidr string, capacity int, ttl time.Duration, nft *nft.Manager)
 	}
 
 	m = &IPMapper{
-		used: utils.NewTTLMap[uint32, uint32](capacity, ttl),
+		used: utils.NewTTLMap[uint32, uint32](20000, ttl),
 		free: utils.NewQueue[uint32](),
+		ttl:  ttl,
 		nft:  nft,
 	}
 	m.free.FillFromIter(utils.GetIPv4HostIterator(ipnet))
@@ -65,4 +68,8 @@ func (m *IPMapper) Clean() (err error) {
 		err = errors.Join(errs...)
 	}
 	return
+}
+
+func (m *IPMapper) GetTTL() time.Duration {
+	return m.ttl
 }

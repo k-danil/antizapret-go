@@ -6,6 +6,17 @@ import (
 
 const ServiceName = `antizapret-go`
 
+type Bind struct {
+	Address  string `yaml:"address"`
+	Port     int    `yaml:"port"`
+	Protocol string `yaml:"protocol"`
+}
+
+type Cache struct {
+	Capacity int           `yaml:"capacity"`
+	TTL      time.Duration `yaml:"ttl"`
+}
+
 type Upstream struct {
 	Name    string        `yaml:"name"`
 	DSN     string        `yaml:"dsn"`
@@ -13,8 +24,9 @@ type Upstream struct {
 }
 
 type Nft struct {
-	Set   string `yaml:"set"`
-	Chain string `yaml:"chain"`
+	Set   string        `yaml:"set"`
+	Chain string        `yaml:"chain"`
+	TTL   time.Duration `yaml:"ttl"`
 }
 
 type RouterType string
@@ -25,7 +37,12 @@ const (
 	RouterTypePassthrough RouterType = "passthrough"
 )
 
-type Router struct {
+type Policy struct {
+	ReloadInterval time.Duration `yaml:"reload_interval"`
+	Matchers       []Matcher     `yaml:"matchers"`
+}
+
+type Matcher struct {
 	Name   string     `yaml:"name"`
 	Type   RouterType `yaml:"type"`
 	Source string     `yaml:"source"`
@@ -38,40 +55,45 @@ type Regexp struct {
 }
 
 type AntizapretConfig struct {
-	Listen struct {
-		Address  string `yaml:"address"`
-		Protocol string `yaml:"protocol"`
-		Port     int    `yaml:"port"`
-	} `yaml:"listen"`
-	Upstreams []Upstream `yaml:"upstreams"`
-	Routers   []Router   `yaml:"routers"`
-	FakeCIDR  string     `yaml:"fake_cidr"`
-	Cache     struct {
-		ClearInterval time.Duration `yaml:"clear_interval"`
-		Capacity      int           `yaml:"capacity"`
-		TTL           time.Duration `yaml:"ttl"`
-	} `yaml:"cache"`
-	Nft             Nft    `yaml:"nft"`
-	LoggingSeverity string `yaml:"logging_severity"`
+	Bindings        []Bind        `yaml:"bindings"`
+	Upstreams       []Upstream    `yaml:"upstreams"`
+	Policy          Policy        `yaml:"policy"`
+	FakeCIDR        string        `yaml:"fake_cidr"`
+	Cache           Cache         `yaml:"cache"`
+	NFT             Nft           `yaml:"nft"`
+	RequestTimeout  time.Duration `yaml:"request_timeout"`
+	LoggingSeverity string        `yaml:"logging_severity"`
 }
 
 var Antizapret AntizapretConfig
 
-const AntizapretDefaultConfig = `listen:
-  address: "127.0.0.1"
-  protocol: "udp"
-  port: 53
-upstream:
-  address: "udp://8.8.8.8:53"
-  timeout: 5s
+const AntizapretDefaultConfig = `bindings:
+  - address: "127.0.0.1"
+    protocol: "udp"
+    port: 53
+upstreams:
+  - name: google
+    dsn: "udp://8.8.8.8:53"
+    timeout: 1s
+policy:
+  reload_interval: 6h
+  matchers:
+    - name: "antizapret"
+      type: "remap"
+      source: https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-hosts.txt
+      regexp:
+        from: "^([^#].*)$"
+        to: ".$1"
 fake_cidr: "10.30.0.0/15"
 cache:
   clear_interval: 1m
   capacity: 20000
-  ttl: 5m
+  ttl: 24h
 nft:
   set: "ANTIZAPRET_SET"
-  chain: "ANTIZAPRET_CHAIN" 
+  chain: "ANTIZAPRET_CHAIN"
+  ttl: 5m
+request_timeout: 2s
 logging_severity: "debug"`
 
 func ReadConfig(configFilename string) error {

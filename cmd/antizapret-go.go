@@ -54,18 +54,32 @@ func main() {
 	}
 	defer func() { _ = srv.Close() }()
 
-	go srv.Cleaner(ctx, cfg.Antizapret.Cache.ClearInterval)
+	go srv.NFTCleaner(ctx, cfg.Antizapret.NFT.TTL)
+
+	go func() {
+		sig := make(chan os.Signal, 1)
+		defer close(sig)
+		signal.Notify(sig, syscall.SIGHUP)
+		srv.PolicyRebuilder(ctx, cfg.Antizapret.Policy.ReloadInterval, sig)
+	}()
 
 	dns.HandleFunc(".", srv.DNS.DNSHandler)
 
-	addr := fmt.Sprintf("%s:%d", cfg.Antizapret.Listen.Address, cfg.Antizapret.Listen.Port)
-	dnsServer := &dns.Server{Addr: addr, Net: cfg.Antizapret.Listen.Protocol, ReusePort: true, MaxTCPQueries: -1}
-	go func() {
-		if err = dnsServer.ListenAndServe(); err != nil {
-			log.L.Fatalw("Error starting DNS server", "err", err)
-		}
-	}()
+	var servers []*dns.Server
+	for _, u := range cfg.Antizapret.Bindings {
+		addr := fmt.Sprintf("%s:%d", u.Address, u.Port)
+		dnsServer := &dns.Server{Addr: addr, Net: u.Protocol, ReusePort: true, MaxTCPQueries: -1}
+		go func() {
+			if err = dnsServer.ListenAndServe(); err != nil {
+				log.L.Fatalw("Error starting DNS server", "addr", addr, "protocol", u.Protocol, "err", err)
+			}
+		}()
+		servers = append(servers, dnsServer)
+	}
+
 	<-ctx.Done()
 	log.L.Infow("Shutting down")
-	dnsServer.Shutdown(ctx)
+	for _, dnsServer := range servers {
+		dnsServer.Shutdown(ctx)
+	}
 }
