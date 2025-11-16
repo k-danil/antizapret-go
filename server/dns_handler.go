@@ -61,6 +61,9 @@ func (d *DNSHandler) DNSHandler(ctx context.Context, w dns.ResponseWriter, r *dn
 	resp := d.cache.GetResponseLambda(r, func() (resp *dns.Msg, ttl time.Duration, err error) {
 		resp, err = d.resolver.Resolve(ctx, r)
 		if err != nil || resp == nil {
+			if err != nil {
+				log.L.Warnw("resolve failed", "err", err)
+			}
 			r.Rcode = dns.RcodeServerFailure
 			resp = r
 			return
