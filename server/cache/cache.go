@@ -66,7 +66,7 @@ func (c *Cache) GetResponse(req *dns.Msg) (resp *dns.Msg) {
 func (c *Cache) GetResponseLambda(req *dns.Msg, lambda func() (*dns.Msg, time.Duration, error)) (resp *dns.Msg) {
 	resp = c.GetResponse(req)
 	if resp != nil {
-		return
+		return resp.Copy()
 	}
 
 	var ttl time.Duration
@@ -76,8 +76,11 @@ func (c *Cache) GetResponseLambda(req *dns.Msg, lambda func() (*dns.Msg, time.Du
 		return
 	}
 
+	resp = resp.Copy()
+	resp.Data = nil
+
 	c.SetResponse(req, resp, ttl)
-	return
+	return resp.Copy()
 }
 
 func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
@@ -100,10 +103,7 @@ func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 		return
 	}
 
-	settable := resp.Copy()
-	settable.Data = nil
-
-	c.cache.Set(c.calculateCacheKey(req), settable, ttl)
+	c.cache.Set(c.calculateCacheKey(req), resp, ttl)
 }
 
 func (c *Cache) calculateCacheKey(req *dns.Msg) string {
