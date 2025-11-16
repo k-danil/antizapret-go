@@ -1,15 +1,27 @@
-listen:
-  address: "127.0.0.1"
-  protocol: "udp"
-  port: 53
-upstream:
-  address: "8.8.8.8:53"
-  timeout: 5s
+bindings:
+  - address: "127.0.0.1"
+    protocol: "udp"
+    port: 53
+upstreams:
+  - name: google
+    dsn: "udp://8.8.8.8:53"
+    timeout: 1s
+policy:
+  reload_interval: 6h
+  matchers:
+    - name: "antizapret"
+      type: "remap"
+      source: https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-hosts.txt
+      regexp:
+        from: "^([^#].*)$"
+        to: ".$1"
 fake_cidr: "10.30.0.0/15"
 cache:
   capacity: 20000
-  ttl: 5m
+  ttl: 24h
 nft:
-  set: "antizapret_mapping"
-  chain: "antizapret"
+  set: "ANTIZAPRET_SET"
+  chain: "ANTIZAPRET_CHAIN"
+  ttl: 5m
+request_timeout: 2s
 logging_severity: "debug"
