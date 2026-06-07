@@ -28,12 +28,10 @@ func writeList(t *testing.T, content string) string {
 	return "file://" + path
 }
 
-func ptr(b bool) *bool { return &b }
-
 func TestRebuildLastSourceWins(t *testing.T) {
 	r, err := NewRouter([]cfg.Matcher{
-		{Name: "bl", Type: cfg.RouterTypeBlackhole, Source: writeList(t, "x.com"), Format: cfg.FormatPlain, Subdomains: ptr(true)},
-		{Name: "rm", Type: cfg.RouterTypeRemap, Source: writeList(t, "x.com"), Format: cfg.FormatPlain, Subdomains: ptr(true)},
+		{Name: "bl", Type: cfg.RouterTypeBlackhole, Source: writeList(t, "x.com"), Format: cfg.FormatPlain, Subdomains: new(true)},
+		{Name: "rm", Type: cfg.RouterTypeRemap, Source: writeList(t, "x.com"), Format: cfg.FormatPlain, Subdomains: new(true)},
 	}, newTestStore(t))
 	if err != nil {
 		t.Fatal(err)
@@ -48,8 +46,8 @@ func TestRebuildLastSourceWins(t *testing.T) {
 
 func TestLookupSubdomainsVsExact(t *testing.T) {
 	r, err := NewRouter([]cfg.Matcher{
-		{Name: "sub", Type: cfg.RouterTypeRemap, Source: writeList(t, "sub.com"), Format: cfg.FormatPlain, Subdomains: ptr(true)},
-		{Name: "ex", Type: cfg.RouterTypeBlackhole, Source: writeList(t, "exact.com"), Format: cfg.FormatPlain, Subdomains: ptr(false)},
+		{Name: "sub", Type: cfg.RouterTypeRemap, Source: writeList(t, "sub.com"), Format: cfg.FormatPlain, Subdomains: new(true)},
+		{Name: "ex", Type: cfg.RouterTypeBlackhole, Source: writeList(t, "exact.com"), Format: cfg.FormatPlain, Subdomains: new(false)},
 	}, newTestStore(t))
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +71,8 @@ func TestRebuildPruneOverridesSpecific(t *testing.T) {
 	// source1 ремапит специфичный www.example.com; source2 (prune, позже) делает
 	// весь .example.com passthrough — должен перебить специфичную запись.
 	r, err := NewRouter([]cfg.Matcher{
-		{Name: "remap", Type: cfg.RouterTypeRemap, Source: writeList(t, "www.example.com"), Format: cfg.FormatPlain, Subdomains: ptr(true)},
-		{Name: "override", Type: cfg.RouterTypePassthrough, Source: writeList(t, "example.com"), Format: cfg.FormatPlain, Subdomains: ptr(true), Prune: true},
+		{Name: "remap", Type: cfg.RouterTypeRemap, Source: writeList(t, "www.example.com"), Format: cfg.FormatPlain, Subdomains: new(true)},
+		{Name: "override", Type: cfg.RouterTypePassthrough, Source: writeList(t, "example.com"), Format: cfg.FormatPlain, Subdomains: new(true), Prune: true},
 	}, newTestStore(t))
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +96,7 @@ func TestRebuildEmptySourceFallsBackToCache(t *testing.T) {
 	}
 
 	r, err := NewRouter([]cfg.Matcher{
-		{Name: "s", Type: cfg.RouterTypeRemap, Source: "file://" + path, Format: cfg.FormatPlain, Subdomains: ptr(true)},
+		{Name: "s", Type: cfg.RouterTypeRemap, Source: "file://" + path, Format: cfg.FormatPlain, Subdomains: new(true)},
 	}, newTestStore(t))
 	if err != nil {
 		t.Fatal(err)
