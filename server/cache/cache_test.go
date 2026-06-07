@@ -1,7 +1,7 @@
 package cache
 
 import (
-	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -16,10 +16,9 @@ func aResp(name string, rcode uint16, answerTTL uint32, withAnswer bool) *dns.Ms
 	m := aQuery(name)
 	m.Rcode = rcode
 	if withAnswer {
-		m.Answer = []dns.RR{&dns.A{
-			Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: answerTTL},
-			A:   net.IPv4(1, 2, 3, 4),
-		}}
+		a := &dns.A{Hdr: dns.Header{Name: name, Class: dns.ClassINET, TTL: answerTTL}}
+		a.Addr = netip.AddrFrom4([4]byte{1, 2, 3, 4})
+		m.Answer = []dns.RR{a}
 	}
 	return m
 }

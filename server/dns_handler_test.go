@@ -24,8 +24,6 @@ func (c *captureWriter) Conn() net.Conn              { return nil }
 func (c *captureWriter) Session() *dns.Session       { return nil }
 func (c *captureWriter) Hijack()                     {}
 
-func ptrBool(b bool) *bool { return &b }
-
 func remapServer(t *testing.T, domain string) *Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -40,7 +38,7 @@ func remapServer(t *testing.T, domain string) *Server {
 	t.Cleanup(func() { _ = store.Close() })
 
 	r, err := rtr.NewRouter([]cfg.Matcher{
-		{Name: "s", Type: cfg.RouterTypeRemap, Source: "file://" + listPath, Format: cfg.FormatPlain, Subdomains: ptrBool(true)},
+		{Name: "s", Type: cfg.RouterTypeRemap, Source: "file://" + listPath, Format: cfg.FormatPlain, Subdomains: new(true)},
 	}, store)
 	if err != nil {
 		t.Fatal(err)

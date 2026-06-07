@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net"
+	"net/netip"
 	"time"
 
 	"codeberg.org/miekg/dns"
@@ -11,7 +12,7 @@ import (
 	"github.com/antizapret-vpn/go-proxy/utils"
 )
 
-var blackholeIP = net.IPv4(127, 6, 6, 6)
+var blackholeAddr = netip.AddrFrom4([4]byte{127, 6, 6, 6})
 
 type Transformer func(*dns.A) (*dns.A, error)
 
@@ -75,18 +76,22 @@ func (s *Server) DNSHandler(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	case rtr.ActionPass:
 	case rtr.ActionBlackhole:
 		mapper = func(a *dns.A) (*dns.A, error) {
-			return &dns.A{Hdr: a.Hdr, A: blackholeIP}, nil
+			rr := &dns.A{Hdr: a.Hdr}
+			rr.Addr = blackholeAddr
+			return rr, nil
 		}
 	case rtr.ActionRemap:
 		ttl := uint32(s.ipMapper.GetTTL().Seconds() * 0.8)
 		mapper = func(a *dns.A) (*dns.A, error) {
-			fakeIP, mapErr := s.ipMapper.Map(a.A, a.Hdr.Name)
+			fakeIP, mapErr := s.ipMapper.Map(net.IP(a.Addr.AsSlice()), a.Hdr.Name)
 			if mapErr != nil {
 				return nil, mapErr
 			}
 			hdr := a.Hdr
 			hdr.TTL = ttl
-			return &dns.A{Hdr: hdr, A: fakeIP}, nil
+			rr := &dns.A{Hdr: hdr}
+			rr.Addr, _ = netip.AddrFromSlice(fakeIP.To4())
+			return rr, nil
 		}
 	}
 
