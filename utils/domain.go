@@ -23,11 +23,3 @@ func NormalizeDomain(s string) string {
 	}
 	return ascii
 }
-
-func DomainToUnicode(s string) string {
-	ascii, err := idna.Lookup.ToUnicode(s)
-	if err != nil || ascii == "" {
-		return ""
-	}
-	return ascii
-}

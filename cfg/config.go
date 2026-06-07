@@ -37,16 +37,28 @@ const (
 	RouterTypePassthrough RouterType = "passthrough"
 )
 
+const (
+	FormatPlain  = "plain"
+	FormatRegexp = "regexp"
+)
+
 type Policy struct {
 	ReloadInterval time.Duration `yaml:"reload_interval"`
 	Matchers       []Matcher     `yaml:"matchers"`
 }
 
 type Matcher struct {
-	Name   string     `yaml:"name"`
-	Type   RouterType `yaml:"type"`
-	Source string     `yaml:"source"`
-	Regexp *Regexp    `yaml:"regexp,omitempty"`
+	Name       string     `yaml:"name"`
+	Type       RouterType `yaml:"type"`
+	Source     string     `yaml:"source"`
+	Format     string     `yaml:"format"`
+	Subdomains *bool      `yaml:"subdomains"`
+	Regexp     *Regexp    `yaml:"regexp,omitempty"`
+	Filter     *Filter    `yaml:"filter,omitempty"`
+}
+
+type Filter struct {
+	Exclude []string `yaml:"exclude"`
 }
 
 type Regexp struct {
@@ -63,7 +75,7 @@ type AntizapretConfig struct {
 	NFT             Nft           `yaml:"nft"`
 	RequestTimeout  time.Duration `yaml:"request_timeout"`
 	LoggingSeverity string        `yaml:"logging_severity"`
-	IPv6            bool          `yaml:"ipv6"`
+	StatePath       string        `yaml:"state_path"`
 }
 
 var Antizapret AntizapretConfig
@@ -82,9 +94,8 @@ policy:
     - name: "antizapret"
       type: "remap"
       source: https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-hosts.txt
-      regexp:
-        from: "^([^#].*)$"
-        to: ".$1"
+      format: plain
+      subdomains: true
 fake_cidr: "10.30.0.0/15"
 cache:
   capacity: 20000
@@ -95,7 +106,7 @@ nft:
   ttl: 5m
 request_timeout: 2s
 logging_severity: "debug"
-ipv6: false`
+state_path: "/var/lib/antizapret-go/state.db"`
 
 func ReadConfig(configFilename string) error {
 	return readConfig(configFilename, AntizapretDefaultConfig, &Antizapret)

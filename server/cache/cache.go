@@ -3,7 +3,7 @@ package cache
 import (
 	"fmt"
 	"math"
-	"reflect"
+	"strings"
 	"time"
 
 	"codeberg.org/miekg/dns"
@@ -114,7 +114,9 @@ func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 }
 
 func (c *Cache) calculateCacheKey(req *dns.Msg) string {
-	return fmt.Sprintf("%s-%s", req.Question[0].Header().Name, reflect.TypeOf(req.Question[0]))
+	q := req.Question[0]
+	name := strings.ToLower(strings.TrimSuffix(q.Header().Name, "."))
+	return fmt.Sprintf("%s|%d|%d", name, dns.RRToType(q), q.Header().Class)
 }
 
 func (c *Cache) Close() error {

@@ -16,14 +16,14 @@ import (
 )
 
 type Server struct {
-	resolver   *resolver.Resolver
-	ipMapper   *mapper.IPMapper
-	nftManager *nft.Manager
-	router     *rtr.Router
-	cache      *cache.Cache
+	resolver    *resolver.Resolver
+	ipMapper    *mapper.IPMapper
+	nftManager  *nft.Manager
+	router      *rtr.Router
+	routerStore *rtr.Store
+	cache       *cache.Cache
 
 	timeout time.Duration
-	ipv6    bool
 }
 
 func NewServer(cfg cfg.AntizapretConfig) (s *Server, err error) {
@@ -43,13 +43,27 @@ func NewServer(cfg cfg.AntizapretConfig) (s *Server, err error) {
 
 	s.cache = cache.NewCache(uint64(cfg.Cache.Capacity), cfg.Cache.TTL)
 
-	s.router = rtr.NewRouter(cfg.Policy.Matchers)
-	if err := s.router.Rebuild(context.Background()); err != nil {
-		log.L.Errorw("failed to rebuild router", "err", err)
+	if s.routerStore, err = rtr.NewStore(cfg.StatePath); err != nil {
+		return
+	}
+
+	if s.router, err = rtr.NewRouter(cfg.Policy.Matchers, s.routerStore); err != nil {
+		return
+	}
+
+	if s.router.LoadCached() == 0 {
+		if rebuildErr := s.router.Rebuild(context.Background()); rebuildErr != nil {
+			log.L.Errorw("initial router rebuild failed", "err", rebuildErr)
+		}
+	} else {
+		go func() {
+			if rebuildErr := s.router.Rebuild(context.Background()); rebuildErr != nil {
+				log.L.Errorw("background router refresh failed", "err", rebuildErr)
+			}
+		}()
 	}
 
 	s.timeout = cfg.RequestTimeout
-	s.ipv6 = cfg.IPv6
 
 	return s, err
 }
@@ -98,6 +112,11 @@ func (s *Server) Close() (err error) {
 	}
 	if err := s.nftManager.Close(); err != nil {
 		errS = append(errS, err)
+	}
+	if s.routerStore != nil {
+		if err := s.routerStore.Close(); err != nil {
+			errS = append(errS, err)
+		}
 	}
 
 	if len(errS) > 0 {
