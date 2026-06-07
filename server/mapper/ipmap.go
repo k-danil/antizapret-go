@@ -62,7 +62,7 @@ func (m *IPMapper) Map(real net.IP, host string) (fake net.IP, err error) {
 		return
 	}
 
-	if err = m.nft.Add(real, utils.Uint32ToIP(fakeUint), fmt.Sprintf("host %s", host)); err != nil {
+	if err = m.nft.Add(utils.Uint32ToIP(fakeUint), real, fmt.Sprintf("host %s", host)); err != nil {
 		m.free.EnqueueTail(fakeUint)
 		return
 	}
@@ -79,7 +79,7 @@ func (m *IPMapper) Clean() (err error) {
 
 	var errs []error
 	for _, pair := range res {
-		if err = m.nft.Delete(utils.Uint32ToIP(pair.Key), utils.Uint32ToIP(pair.Value)); err != nil {
+		if err = m.nft.Delete(utils.Uint32ToIP(pair.Value), utils.Uint32ToIP(pair.Key)); err != nil {
 			errs = append(errs, err)
 			m.used.Set(pair.Key, pair.Value)
 			continue
