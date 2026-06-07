@@ -10,17 +10,18 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 )
 
-const (
-	DefaultTTL      = time.Duration(0)
-	MinCacheableTTL = time.Second * 5
-)
+const DefaultTTL = time.Duration(0)
 
 type Cache struct {
-	cache *ttlcache.Cache[string, *dns.Msg]
+	cache  *ttlcache.Cache[string, *dns.Msg]
+	minTTL time.Duration
+	maxTTL time.Duration
 }
 
-func NewCache(capacity uint64, defaultTTL time.Duration) (c *Cache) {
+func NewCache(capacity uint64, defaultTTL, minTTL, maxTTL time.Duration) (c *Cache) {
 	c = &Cache{
+		minTTL: minTTL,
+		maxTTL: maxTTL,
 		cache: ttlcache.New[string, *dns.Msg](
 			ttlcache.WithCapacity[string, *dns.Msg](capacity),
 			ttlcache.WithTTL[string, *dns.Msg](defaultTTL),
@@ -46,7 +47,7 @@ func (c *Cache) GetResponse(req *dns.Msg) (resp *dns.Msg) {
 	}
 
 	itemTTL := time.Until(item.ExpiresAt())
-	if itemTTL < MinCacheableTTL {
+	if itemTTL <= 0 {
 		return
 	}
 
@@ -106,8 +107,11 @@ func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 		ttl = time.Duration(ttlUint) * time.Second
 	}
 
-	if ttl < MinCacheableTTL {
-		return
+	if ttl > c.maxTTL {
+		ttl = c.maxTTL
+	}
+	if ttl < c.minTTL {
+		ttl = c.minTTL
 	}
 
 	c.cache.Set(c.calculateCacheKey(req), resp, ttl)

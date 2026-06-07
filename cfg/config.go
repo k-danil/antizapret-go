@@ -15,6 +15,8 @@ type Bind struct {
 type Cache struct {
 	Capacity int           `yaml:"capacity"`
 	TTL      time.Duration `yaml:"ttl"`
+	MinTTL   time.Duration `yaml:"min_ttl"`
+	MaxTTL   time.Duration `yaml:"max_ttl"`
 }
 
 type Upstream struct {
@@ -91,15 +93,17 @@ upstreams:
 policy:
   reload_interval: 6h
   matchers:
-    - name: "antizapret"
+    - name: "hosts"
       type: "remap"
-      source: https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-hosts.txt
+      source: file:///etc/antizapret-go/hosts.txt
       format: plain
       subdomains: true
 fake_cidr: "10.30.0.0/15"
 cache:
   capacity: 20000
   ttl: 24h
+  min_ttl: 1m
+  max_ttl: 24h
 nft:
   set: "ANTIZAPRET_SET"
   chain: "ANTIZAPRET_CHAIN"

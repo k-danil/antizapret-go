@@ -9,12 +9,11 @@ upstreams:
 policy:
   reload_interval: 6h
   matchers:
-    - name: "antizapret"
+    - name: "hosts"
       type: "remap"
-      source: https://raw.githubusercontent.com/GubernievS/AntiZapret-VPN/main/setup/root/antizapret/download/include-hosts.txt
-      regexp:
-        from: "^([^#].*)$"
-        to: ".$1"
+      source: file:///etc/antizapret-go/hosts.txt
+      format: plain
+      subdomains: true
 fake_cidr: "10.30.0.0/15"
 cache:
   capacity: 20000
