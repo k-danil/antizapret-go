@@ -1,15 +1,10 @@
 package router
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
-	"os"
-	"regexp"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -20,52 +15,9 @@ import (
 
 type Router struct {
 	sources []Source
+	store   *Store
 
 	r atomic.Pointer[utils.Radix[Action]]
-}
-
-type Regexp struct {
-	From regexp.Regexp
-	To   string
-}
-
-type Source struct {
-	Name   string
-	Action Action
-	URI    string
-	Regexp *Regexp
-}
-
-func (s *Source) GetReader(ctx context.Context) (r io.ReadCloser, err error) {
-	var uri *url.URL
-	if uri, err = url.Parse(s.URI); err != nil {
-		err = fmt.Errorf("failed to parse uri `%s` source `%s`: %w", s.URI, s.Name, err)
-		return
-	}
-
-	switch uri.Scheme {
-	case "file":
-		if r, err = os.Open(uri.Path); err != nil {
-			err = fmt.Errorf("failed to open file `%s` for source `%s`: %w", uri.Path, s.Name, err)
-			return
-		}
-	case "http", "https":
-		var req *http.Request
-		if req, err = http.NewRequestWithContext(ctx, http.MethodGet, uri.String(), nil); err != nil {
-			err = fmt.Errorf("failed to create request for source `%s`: %w", s.Name, err)
-			return
-		}
-		var resp *http.Response
-		if resp, err = http.DefaultClient.Do(req); err != nil {
-			err = fmt.Errorf("failed to get response for source `%s`: %w", s.Name, err)
-			return
-		}
-		r = resp.Body
-	default:
-		err = fmt.Errorf("unsupported scheme `%s` for source `%s`", uri.Scheme, s.Name)
-		return
-	}
-	return
 }
 
 type Action uint8
@@ -76,79 +28,144 @@ const (
 	ActionPass
 )
 
-func NewRouter(routers []cfg.Matcher) (r *Router) {
-	sources := make([]Source, 0, len(routers))
-	for _, rtr := range routers {
-		s := Source{
-			Name: rtr.Name,
-			URI:  rtr.Source,
-		}
-		if rtr.Regexp != nil {
-			s.Regexp = &Regexp{
-				From: *regexp.MustCompile(rtr.Regexp.From),
-				To:   rtr.Regexp.To,
-			}
-		}
+func NewRouter(matchers []cfg.Matcher, store *Store) (r *Router, err error) {
+	sources := make([]Source, 0, len(matchers))
+	for _, m := range matchers {
+		s := Source{Name: m.Name, URI: m.Source}
 
-		switch rtr.Type {
+		switch m.Type {
 		case cfg.RouterTypeBlackhole:
 			s.Action = ActionBlackhole
 		case cfg.RouterTypeRemap:
 			s.Action = ActionRemap
 		case cfg.RouterTypePassthrough:
 			s.Action = ActionPass
+		default:
+			err = fmt.Errorf("unknown router type `%s` for source `%s`", m.Type, m.Name)
+			return
 		}
+
+		subdomains := true
+		if m.Subdomains != nil {
+			subdomains = *m.Subdomains
+		}
+
+		if s.Parser, err = newParser(m, subdomains); err != nil {
+			return
+		}
+
+		if s.Filter, err = newFilter(m); err != nil {
+			return
+		}
+
 		sources = append(sources, s)
 	}
-	r = &Router{
-		sources: sources,
+
+	r = &Router{sources: sources, store: store}
+	return
+}
+
+// Rebuild — best-effort: сбойный или пустой источник заменяется его last-known-good
+// снимком из store, остальные обновляются; radix подменяется атомарно.
+func (r *Router) Rebuild(ctx context.Context) (err error) {
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+
+	radix := utils.NewRadix[Action]()
+
+	var (
+		length int
+		errs   []error
+	)
+	for _, s := range r.sources {
+		entries, ferr := r.fetchSource(ctx, s)
+		if ferr == nil && len(entries) > 0 {
+			if serr := r.store.Save(s.Name, entries); serr != nil {
+				log.L.Warnw("failed to persist source cache", "source", s.Name, "err", serr)
+			}
+		} else {
+			// сбой или подозрительно пустой ответ — откатываемся на last-known-good,
+			// чтобы транзиентная проблема источника не меняла поведение прокси
+			var lerr error
+			var cached []Entry
+			if cached, lerr = r.store.Load(s.Name); lerr != nil {
+				if ferr != nil {
+					errs = append(errs, fmt.Errorf("source `%s`: fetch failed (%w), no cache (%v)", s.Name, ferr, lerr))
+					continue
+				}
+				log.L.Warnw("source returned empty, no cache to fall back on", "source", s.Name)
+			} else {
+				log.L.Warnw("source unusable, using cached entries",
+					"source", s.Name, "fetched", len(entries), "err", ferr)
+				entries = cached
+			}
+		}
+
+		insertEntries(radix, s.Action, entries)
+		length += len(entries)
+	}
+
+	r.r.Store(radix)
+	log.L.Infow("router rebuilt", "length", length)
+
+	if len(errs) > 0 {
+		err = errors.Join(errs...)
+	}
+	return
+}
+
+// LoadCached собирает radix только из персистентного кэша, без сети — для
+// быстрого старта. Возвращает число загруженных записей (0 => холодный старт).
+func (r *Router) LoadCached() (n int) {
+	radix := utils.NewRadix[Action]()
+	for _, s := range r.sources {
+		entries, err := r.store.Load(s.Name)
+		if err != nil {
+			continue
+		}
+		insertEntries(radix, s.Action, entries)
+		n += len(entries)
+	}
+	if n > 0 {
+		r.r.Store(radix)
+	}
+	return
+}
+
+func (r *Router) fetchSource(ctx context.Context, s Source) (entries []Entry, err error) {
+	var rdr io.ReadCloser
+	if rdr, err = s.GetReader(ctx); err != nil {
+		err = fmt.Errorf("failed to get reader for source `%s`: %w", s.Name, err)
+		return
+	}
+	defer func() { _ = rdr.Close() }()
+
+	if err = s.Parser.Parse(rdr, func(e Entry) {
+		domain := utils.NormalizeDomain(e.Domain)
+		if domain == "" {
+			log.L.Warnw("skipped entry in source", "entry", e.Domain, "source", s.Name)
+			return
+		}
+		if !s.Filter.Keep(domain) {
+			return
+		}
+		entries = append(entries, Entry{Domain: domain, Subdomains: e.Subdomains})
+	}); err != nil {
+		err = fmt.Errorf("failed to read source `%s`: %w", s.Name, err)
 	}
 
 	return
 }
 
-func (r *Router) Rebuild(ctx context.Context) error {
-	radix := utils.NewRadix[Action]()
-
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-
-	var length int
-	for _, s := range r.sources {
-		err := func(s Source) (err error) {
-			var rdr io.ReadCloser
-			if rdr, err = s.GetReader(ctx); err != nil {
-				err = fmt.Errorf("failed to get reader for source `%s`: %w", s.Name, err)
-				return
-			}
-			defer func() { _ = rdr.Close() }()
-			scanner := bufio.NewScanner(rdr)
-			for scanner.Scan() {
-				line, match := r.processLine(scanner.Text(), s.Regexp)
-				if line != "" {
-					radix.Insert(line, s.Action, match)
-					length++
-				} else {
-					log.L.Warnw("skipped line in source", "line", scanner.Text(), "source", s.Name)
-				}
-			}
-			err = scanner.Err()
-			if err != nil {
-				err = fmt.Errorf("failed to read source `%s`: %w", s.Name, err)
-			}
-
-			return
-		}(s)
-		if err != nil {
-			return err
+func insertEntries(radix *utils.Radix[Action], action Action, entries []Entry) {
+	for _, e := range entries {
+		mode := utils.MatchExact
+		if e.Subdomains {
+			mode = utils.MatchPrefix
 		}
+		radix.Insert(e.Domain, action, mode)
 	}
-
-	log.L.Infow("router rebuilt", "length", length)
-	r.r.Store(radix)
-
-	return nil
 }
 
 func (r *Router) Lookup(domain string) (action Action) {
@@ -157,24 +174,8 @@ func (r *Router) Lookup(domain string) (action Action) {
 		return ActionPass
 	}
 	var ok bool
-	action, ok = radix.Get(domain)
-	if !ok {
+	if action, ok = radix.Get(domain); !ok {
 		action = ActionPass
 	}
-	return
-}
-
-func (r *Router) processLine(line string, regexp *Regexp) (domain string, match utils.MatchMode) {
-	line = utils.DomainToUnicode(line)
-	if regexp != nil {
-		line = regexp.From.ReplaceAllString(line, regexp.To)
-	}
-	if strings.HasPrefix(line, `.`) {
-		match = utils.MatchPrefix
-	} else {
-		match = utils.MatchExact
-	}
-	domain = utils.NormalizeDomain(line)
-
 	return
 }

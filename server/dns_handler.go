@@ -99,10 +99,9 @@ func (s *Server) rewriteRRS(in []dns.RR, transform Transformer) ([]dns.RR, error
 				out = append(out, na)
 			}
 		case *dns.AAAA:
-			if !s.ipv6 {
-				continue
-			}
-			out = append(out, v)
+			// remap/blackhole применяются только к A; AAAA убираем, чтобы реальный
+			// IPv6 не утёк мимо туннеля — клиент упадёт на IPv4.
+			continue
 		default:
 			out = append(out, rr)
 		}

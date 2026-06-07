@@ -77,6 +77,10 @@ func main() {
 	for _, u := range cfg.Antizapret.Bindings {
 		addr := fmt.Sprintf("%s:%d", u.Address, u.Port)
 		protocol := u.Protocol
+		if u.Address == "" || u.Address == "0.0.0.0" || u.Address == "::" {
+			log.L.Warnw("DNS server bound to wildcard address; ensure it is not an open resolver",
+				"address", addr, "protocol", protocol)
+		}
 		dnsServer := &dns.Server{Addr: addr, Net: protocol, ReusePort: true, MaxTCPQueries: -1}
 		go func() {
 			if err := dnsServer.ListenAndServe(); err != nil {
