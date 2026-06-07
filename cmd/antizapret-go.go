@@ -13,6 +13,7 @@ import (
 	"github.com/antizapret-vpn/go-proxy/cfg"
 	"github.com/antizapret-vpn/go-proxy/log"
 	"github.com/antizapret-vpn/go-proxy/server"
+	"github.com/antizapret-vpn/go-proxy/server/nft"
 )
 
 const shutdownTimeout = 5 * time.Second
@@ -55,7 +56,13 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	srv, err := server.NewServer(cfg.Antizapret)
+	nftManager, err := nft.NewNftManager(cfg.Antizapret.NFT.Chain, cfg.Antizapret.NFT.Set)
+	if err != nil {
+		log.L.Fatalw("Error creating nft manager",
+			"err", err)
+	}
+
+	srv, err := server.NewServer(cfg.Antizapret, nftManager)
 	if err != nil {
 		log.L.Fatalw("Error creating server",
 			"err", err)

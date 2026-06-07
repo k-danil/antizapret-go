@@ -99,11 +99,11 @@ func TestMapRollbackOnAddError(t *testing.T) {
 
 	// если бы откат не вернул IP в пул, второй Map упал бы на "no free IPs"
 	nft.addErr = nil
-	fake, err := m.Map(realIP, "h")
+	fakeIP, err := m.Map(realIP, "h")
 	if err != nil {
 		t.Fatalf("after rollback the IP must be reusable, got: %v", err)
 	}
-	if fake == nil {
+	if fakeIP == nil {
 		t.Fatal("expected a fake IP after successful retry")
 	}
 }
@@ -180,7 +180,7 @@ func TestCleanKeepsMappingOnDeleteError(t *testing.T) {
 	}
 
 	realIP := net.IPv4(8, 8, 8, 8)
-	fake, err := m.Map(realIP, "h")
+	fakeIP, err := m.Map(realIP, "h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,8 +196,8 @@ func TestCleanKeepsMappingOnDeleteError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !again.Equal(fake) {
-		t.Fatalf("mapping changed after failed delete: %s vs %s", fake, again)
+	if !again.Equal(fakeIP) {
+		t.Fatalf("mapping changed after failed delete: %s vs %s", fakeIP, again)
 	}
 	if nft.addCount() != 1 {
 		t.Fatalf("nft.Add called %d times, want 1 (mapping was kept, not re-created)", nft.addCount())

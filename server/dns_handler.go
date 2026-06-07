@@ -21,9 +21,27 @@ func (s *Server) DNSHandler(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	defer cancel()
 
 	if len(r.Question) != 1 {
+		r.Response = true
 		r.Rcode = dns.RcodeFormatError
+		r.Data = nil
 		_, _ = r.WriteTo(w)
 		return
+	}
+
+	action := s.router.Lookup(utils.NormalizeDomain(r.Question[0].Header().Name))
+
+	// Для remap/blackhole-доменов глушим HTTPS/SVCB: их подсказки (ipv4hint, ECH)
+	// позволили бы клиенту пойти мимо подмены A-записи. Пустой NODATA заставляет
+	// клиента упасть на A-запрос, который будет подменён.
+	if action == rtr.ActionRemap || action == rtr.ActionBlackhole {
+		if qtype := dns.RRToType(r.Question[0]); qtype == dns.TypeHTTPS || qtype == dns.TypeSVCB {
+			r.Response = true
+			r.Rcode = dns.RcodeSuccess
+			r.Answer, r.Ns, r.Extra = nil, nil, nil
+			r.Data = nil // Data ещё держит байты запроса; обнуляем, чтобы WriteTo перепаковал из полей
+			_, _ = r.WriteTo(w)
+			return
+		}
 	}
 
 	resp := s.cache.GetResponseLambda(r, func() (resp *dns.Msg, ttl time.Duration, err error) {
@@ -45,13 +63,15 @@ func (s *Server) DNSHandler(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	})
 
 	if resp.Rcode != dns.RcodeSuccess {
+		resp.Response = true
+		resp.Data = nil
 		_, _ = resp.WriteTo(w)
 		return
 	}
 
 	var err error
 	var mapper Transformer
-	switch s.router.Lookup(utils.NormalizeDomain(r.Question[0].Header().Name)) {
+	switch action {
 	case rtr.ActionPass:
 	case rtr.ActionBlackhole:
 		mapper = func(a *dns.A) (*dns.A, error) {
@@ -60,13 +80,13 @@ func (s *Server) DNSHandler(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 	case rtr.ActionRemap:
 		ttl := uint32(s.ipMapper.GetTTL().Seconds() * 0.8)
 		mapper = func(a *dns.A) (*dns.A, error) {
-			fake, mapErr := s.ipMapper.Map(a.A, a.Hdr.Name)
+			fakeIP, mapErr := s.ipMapper.Map(a.A, a.Hdr.Name)
 			if mapErr != nil {
 				return nil, mapErr
 			}
 			hdr := a.Hdr
 			hdr.TTL = ttl
-			return &dns.A{Hdr: hdr, A: fake}, nil
+			return &dns.A{Hdr: hdr, A: fakeIP}, nil
 		}
 	}
 

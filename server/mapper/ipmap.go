@@ -46,7 +46,7 @@ func NewIPMapper(cidr string, ttl time.Duration, nft nftProgrammer) (m *IPMapper
 	return m, nil
 }
 
-func (m *IPMapper) Map(realIP net.IP, host string) (fake net.IP, err error) {
+func (m *IPMapper) Map(realIP net.IP, host string) (fakeIP net.IP, err error) {
 	realUint := utils.IPToUint32(realIP)
 
 	if fakeUint, ok := m.used.Get(realUint); ok {

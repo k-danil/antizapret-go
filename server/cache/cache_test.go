@@ -35,11 +35,11 @@ func TestSetResponseCachingRules(t *testing.T) {
 		{"servfail not cached", aResp("a.test.", dns.RcodeServerFailure, 600, false), DefaultTTL, false},
 		{"nxdomain with explicit ttl cached", aResp("a.test.", dns.RcodeNameError, 0, false), 24 * time.Hour, true},
 		{"success empty records not cached", aResp("a.test.", dns.RcodeSuccess, 0, false), DefaultTTL, false},
-		{"success ttl below floor not cached", aResp("a.test.", dns.RcodeSuccess, 3, true), DefaultTTL, false},
+		{"success short ttl cached (clamped up)", aResp("a.test.", dns.RcodeSuccess, 3, true), DefaultTTL, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			c := NewCache(100, time.Hour)
+			c := NewCache(100, time.Hour, time.Second, time.Hour)
 			defer func() { _ = c.Close() }()
 
 			req := aQuery("a.test.")
@@ -51,8 +51,33 @@ func TestSetResponseCachingRules(t *testing.T) {
 	}
 }
 
+func TestCacheClampsTTL(t *testing.T) {
+	c := NewCache(100, time.Hour, 60*time.Second, 3600*time.Second)
+	defer func() { _ = c.Close() }()
+
+	reqShort := aQuery("short.test.")
+	c.SetResponse(reqShort, aResp("short.test.", dns.RcodeSuccess, 5, true), DefaultTTL)
+	short := c.GetResponse(reqShort)
+	if short == nil {
+		t.Fatal("short-ttl answer must be cached (clamped up to min)")
+	}
+	if got := short.Answer[0].Header().TTL; got < 55 || got > 60 {
+		t.Fatalf("min-clamped ttl = %d, want ~60", got)
+	}
+
+	reqLong := aQuery("long.test.")
+	c.SetResponse(reqLong, aResp("long.test.", dns.RcodeSuccess, 360000, true), DefaultTTL)
+	long := c.GetResponse(reqLong)
+	if long == nil {
+		t.Fatal("long-ttl answer must be cached")
+	}
+	if got := long.Answer[0].Header().TTL; got < 3595 || got > 3600 {
+		t.Fatalf("max-capped ttl = %d, want ~3600", got)
+	}
+}
+
 func TestCacheKeyDistinguishesType(t *testing.T) {
-	c := NewCache(10, time.Hour)
+	c := NewCache(10, time.Hour, time.Second, time.Hour)
 	defer func() { _ = c.Close() }()
 
 	a := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}}
@@ -63,7 +88,7 @@ func TestCacheKeyDistinguishesType(t *testing.T) {
 }
 
 func TestCacheKeyNormalizesName(t *testing.T) {
-	c := NewCache(10, time.Hour)
+	c := NewCache(10, time.Hour, time.Second, time.Hour)
 	defer func() { _ = c.Close() }()
 
 	upper := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "Example.COM.", Class: dns.ClassINET}}}}
@@ -74,7 +99,7 @@ func TestCacheKeyNormalizesName(t *testing.T) {
 }
 
 func TestGetResponseLambdaCachesOnMiss(t *testing.T) {
-	c := NewCache(100, time.Hour)
+	c := NewCache(100, time.Hour, time.Second, time.Hour)
 	defer func() { _ = c.Close() }()
 
 	req := aQuery("a.test.")
