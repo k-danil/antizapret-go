@@ -197,6 +197,39 @@ func (n *radixNode[T]) get(s []byte, bestVal T, bestOk bool) (T, bool) {
 	return bestVal, bestOk
 }
 
+// PruneBelow обрезает все более специфичные ветки под key (узел key сохраняется).
+// Вызывать после Insert(key, ...): тогда узел key гарантированно существует.
+func (r *Radix[T]) PruneBelow(key string) {
+	if key == "" {
+		return
+	}
+	r.root.pruneBelow(r.reverseDomain([]byte(key)))
+}
+
+func (n *radixNode[T]) pruneBelow(s []byte) {
+	if len(s) == 0 {
+		n.children = nil
+		return
+	}
+
+	i, ok := slices.BinarySearchFunc(n.children, s[0], func(c child[T], u uint8) int {
+		return cmp.Compare(c.key, u)
+	})
+	if !ok {
+		return
+	}
+
+	ch := n.children[i].node
+	if len(s) < len(ch.prefix) || !bytes.HasPrefix(s, ch.prefix) {
+		return
+	}
+	if len(s) == len(ch.prefix) {
+		ch.children = nil
+		return
+	}
+	ch.pruneBelow(s[len(ch.prefix):])
+}
+
 func (r *Radix[T]) reverseDomain(domain []byte) []byte {
 	b := r.pool.Get().(*bytes.Buffer)
 	defer r.pool.Put(b)

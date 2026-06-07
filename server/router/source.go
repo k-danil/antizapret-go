@@ -1,7 +1,10 @@
 package router
 
 import (
+	"bufio"
+	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +18,7 @@ type Source struct {
 	URI    string
 	Parser Parser
 	Filter *Filter
+	Prune  bool
 }
 
 func (s *Source) GetReader(ctx context.Context) (r io.ReadCloser, err error) {
@@ -49,6 +53,40 @@ func (s *Source) GetReader(ctx context.Context) (r io.ReadCloser, err error) {
 		r = resp.Body
 	default:
 		err = fmt.Errorf("unsupported scheme `%s` for source `%s`", uri.Scheme, s.Name)
+		return
 	}
-	return
+
+	return maybeGunzip(r)
+}
+
+type multiCloserReader struct {
+	io.Reader
+	closers []io.Closer
+}
+
+func (m multiCloserReader) Close() error {
+	var errs []error
+	for _, c := range m.closers {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// maybeGunzip прозрачно распаковывает gzip по сигнатуре содержимого (0x1f 0x8b) —
+// поддержка .gz-источников (напр. remove-hosts.txt.gz) независимо от расширения.
+func maybeGunzip(raw io.ReadCloser) (io.ReadCloser, error) {
+	br := bufio.NewReader(raw)
+	magic, _ := br.Peek(2)
+	if len(magic) < 2 || magic[0] != 0x1f || magic[1] != 0x8b {
+		return multiCloserReader{Reader: br, closers: []io.Closer{raw}}, nil
+	}
+
+	gz, err := gzip.NewReader(br)
+	if err != nil {
+		_ = raw.Close()
+		return nil, fmt.Errorf("gzip: %w", err)
+	}
+	return multiCloserReader{Reader: gz, closers: []io.Closer{gz, raw}}, nil
 }

@@ -31,7 +31,7 @@ const (
 func NewRouter(matchers []cfg.Matcher, store *Store) (r *Router, err error) {
 	sources := make([]Source, 0, len(matchers))
 	for _, m := range matchers {
-		s := Source{Name: m.Name, URI: m.Source}
+		s := Source{Name: m.Name, URI: m.Source, Prune: m.Prune}
 
 		switch m.Type {
 		case cfg.RouterTypeBlackhole:
@@ -102,7 +102,7 @@ func (r *Router) Rebuild(ctx context.Context) (err error) {
 			}
 		}
 
-		insertEntries(radix, s.Action, entries)
+		insertEntries(radix, s.Action, s.Prune, entries)
 		length += len(entries)
 	}
 
@@ -124,7 +124,7 @@ func (r *Router) LoadCached() (n int) {
 		if err != nil {
 			continue
 		}
-		insertEntries(radix, s.Action, entries)
+		insertEntries(radix, s.Action, s.Prune, entries)
 		n += len(entries)
 	}
 	if n > 0 {
@@ -158,13 +158,16 @@ func (r *Router) fetchSource(ctx context.Context, s Source) (entries []Entry, er
 	return
 }
 
-func insertEntries(radix *utils.Radix[Action], action Action, entries []Entry) {
+func insertEntries(radix *utils.Radix[Action], action Action, prune bool, entries []Entry) {
 	for _, e := range entries {
 		mode := utils.MatchExact
 		if e.Subdomains {
 			mode = utils.MatchPrefix
 		}
 		radix.Insert(e.Domain, action, mode)
+		if prune {
+			radix.PruneBelow(e.Domain)
+		}
 	}
 }
 

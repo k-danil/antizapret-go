@@ -69,6 +69,28 @@ func TestLookupSubdomainsVsExact(t *testing.T) {
 	}
 }
 
+func TestRebuildPruneOverridesSpecific(t *testing.T) {
+	// source1 ремапит специфичный www.example.com; source2 (prune, позже) делает
+	// весь .example.com passthrough — должен перебить специфичную запись.
+	r, err := NewRouter([]cfg.Matcher{
+		{Name: "remap", Type: cfg.RouterTypeRemap, Source: writeList(t, "www.example.com"), Format: cfg.FormatPlain, Subdomains: ptr(true)},
+		{Name: "override", Type: cfg.RouterTypePassthrough, Source: writeList(t, "example.com"), Format: cfg.FormatPlain, Subdomains: ptr(true), Prune: true},
+	}, newTestStore(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Rebuild(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := r.Lookup("www.example.com"); got != ActionPass {
+		t.Fatalf("www.example.com = %v, want ActionPass (pruned by override)", got)
+	}
+	if got := r.Lookup("example.com"); got != ActionPass {
+		t.Fatalf("example.com = %v, want ActionPass", got)
+	}
+}
+
 func TestRebuildEmptySourceFallsBackToCache(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "list.txt")
 	if err := os.WriteFile(path, []byte("x.com"), 0o600); err != nil {
