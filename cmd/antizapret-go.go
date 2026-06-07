@@ -7,12 +7,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"codeberg.org/miekg/dns"
 	"github.com/antizapret-vpn/go-proxy/cfg"
 	"github.com/antizapret-vpn/go-proxy/log"
 	"github.com/antizapret-vpn/go-proxy/server"
 )
+
+const shutdownTimeout = 5 * time.Second
 
 func main() {
 	log.L.Infow("starting",
@@ -41,11 +44,16 @@ func main() {
 			"err", err)
 	}
 
-	_ = log.SetSeverity(cfg.Antizapret.LoggingSeverity)
+	if err := log.SetSeverity(cfg.Antizapret.LoggingSeverity); err != nil {
+		log.L.Warnw("invalid logging_severity, using default",
+			"value", cfg.Antizapret.LoggingSeverity, "err", err)
+	}
 	defer log.Sync()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	srv, err := server.NewServer(cfg.Antizapret)
 	if err != nil {
@@ -72,7 +80,8 @@ func main() {
 		dnsServer := &dns.Server{Addr: addr, Net: protocol, ReusePort: true, MaxTCPQueries: -1}
 		go func() {
 			if err := dnsServer.ListenAndServe(); err != nil {
-				log.L.Fatalw("Error starting DNS server", "addr", addr, "protocol", protocol, "err", err)
+				log.L.Errorw("Error starting DNS server", "addr", addr, "protocol", protocol, "err", err)
+				cancel()
 			}
 		}()
 		servers = append(servers, dnsServer)
@@ -80,7 +89,10 @@ func main() {
 
 	<-ctx.Done()
 	log.L.Infow("Shutting down")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
 	for _, dnsServer := range servers {
-		dnsServer.Shutdown(ctx)
+		dnsServer.Shutdown(shutdownCtx)
 	}
 }

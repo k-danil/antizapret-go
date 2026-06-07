@@ -63,6 +63,7 @@ type AntizapretConfig struct {
 	NFT             Nft           `yaml:"nft"`
 	RequestTimeout  time.Duration `yaml:"request_timeout"`
 	LoggingSeverity string        `yaml:"logging_severity"`
+	IPv6            bool          `yaml:"ipv6"`
 }
 
 var Antizapret AntizapretConfig
@@ -93,7 +94,8 @@ nft:
   chain: "ANTIZAPRET_CHAIN"
   ttl: 5m
 request_timeout: 2s
-logging_severity: "debug"`
+logging_severity: "debug"
+ipv6: false`
 
 func ReadConfig(configFilename string) error {
 	return readConfig(configFilename, AntizapretDefaultConfig, &Antizapret)

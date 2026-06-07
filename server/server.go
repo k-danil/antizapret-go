@@ -49,6 +49,7 @@ func NewServer(cfg cfg.AntizapretConfig) (s *Server, err error) {
 	}
 
 	s.timeout = cfg.RequestTimeout
+	s.ipv6 = cfg.IPv6
 
 	return s, err
 }

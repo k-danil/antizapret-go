@@ -51,7 +51,21 @@ func (r *Resolver) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, er
 		err = errors.New("no upstreams")
 		return
 	}
-	now := time.Now()
-	index := now.Nanosecond() % len(r.upstreams)
-	return r.upstreams[index].Resolve(ctx, req)
+	n := len(r.upstreams)
+	start := time.Now().Nanosecond() % n
+
+	var errs []error
+	for i := 0; i < n; i++ {
+		if ctx.Err() != nil {
+			errs = append(errs, ctx.Err())
+			break
+		}
+		if resp, err = r.upstreams[(start+i)%n].Resolve(ctx, req); err == nil {
+			return
+		}
+		errs = append(errs, err)
+	}
+
+	err = errors.Join(errs...)
+	return
 }

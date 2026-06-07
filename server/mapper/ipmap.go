@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/antizapret-vpn/go-proxy/server/nft"
@@ -17,6 +18,10 @@ type IPMapper struct {
 	ttl time.Duration
 
 	nft *nft.Manager
+
+	// allocMu сериализует холодные пути (аллокация в Map, teardown в Clean),
+	// чтобы переаллокация real не пересекалась с его удалением.
+	allocMu sync.Mutex
 }
 
 func NewIPMapper(cidr string, ttl time.Duration, nft *nft.Manager) (m *IPMapper, err error) {
@@ -37,32 +42,49 @@ func NewIPMapper(cidr string, ttl time.Duration, nft *nft.Manager) (m *IPMapper,
 	return m, nil
 }
 
-func (m *IPMapper) Map(real net.IP, host string) (net.IP, error) {
+func (m *IPMapper) Map(real net.IP, host string) (fake net.IP, err error) {
 	realUint := utils.IPToUint32(real)
-	fakeUint, ok := m.used.Get(realUint)
-	if ok {
+
+	if fakeUint, ok := m.used.Get(realUint); ok {
 		return utils.Uint32ToIP(fakeUint), nil
 	}
-	fakeUint, ok = m.free.Dequeue()
+
+	m.allocMu.Lock()
+	defer m.allocMu.Unlock()
+
+	if fakeUint, ok := m.used.Get(realUint); ok {
+		return utils.Uint32ToIP(fakeUint), nil
+	}
+
+	fakeUint, ok := m.free.Dequeue()
 	if !ok {
-		return nil, fmt.Errorf("no free IPs")
+		err = fmt.Errorf("no free IPs")
+		return
 	}
+
+	if err = m.nft.Add(real, utils.Uint32ToIP(fakeUint), fmt.Sprintf("host %s", host)); err != nil {
+		m.free.EnqueueTail(fakeUint)
+		return
+	}
+
 	m.used.Set(realUint, fakeUint)
-	if err := m.nft.Add(real, utils.Uint32ToIP(fakeUint), fmt.Sprintf("host %s", host)); err != nil {
-		return nil, err
-	}
 	return utils.Uint32ToIP(fakeUint), nil
 }
 
 func (m *IPMapper) Clean() (err error) {
+	m.allocMu.Lock()
+	defer m.allocMu.Unlock()
+
 	res := m.used.Clean()
 
 	var errs []error
 	for _, pair := range res {
 		if err = m.nft.Delete(utils.Uint32ToIP(pair.Key), utils.Uint32ToIP(pair.Value)); err != nil {
 			errs = append(errs, err)
+			m.used.Set(pair.Key, pair.Value)
+			continue
 		}
-		m.free.EnqueueHead(pair.Value)
+		m.free.EnqueueTail(pair.Value)
 	}
 	if len(errs) > 0 {
 		err = errors.Join(errs...)

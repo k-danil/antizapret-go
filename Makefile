@@ -2,7 +2,7 @@ COMMIT_SHA := $(shell git log -1 --pretty=format:"%h")
 BUILD_TIMESTAMP=$(shell date "+%Y-%m-%d %H:%M:%S")
 BUILD_FLAGS=
 BUILD_ENVS=CGO_ENABLED=0;GOARCH=arm64;GOOS=linux
-BUILD_CONSTANTS=-ldflags "-X 'antizapret-go/cfg.BuildCommitSha=$(COMMIT_SHA)' -X 'antizapret-go/cfg.BuildTimestamp=$(BUILD_TIMESTAMP)'"
+BUILD_CONSTANTS=-ldflags "-X 'github.com/antizapret-vpn/go-proxy/cfg.BuildCommitSha=$(COMMIT_SHA)' -X 'github.com/antizapret-vpn/go-proxy/cfg.BuildTimestamp=$(BUILD_TIMESTAMP)'"
 
 all: antizapret_go
 

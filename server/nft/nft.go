@@ -1,8 +1,10 @@
 package nft
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"syscall"
 
 	"github.com/google/nftables"
@@ -83,10 +85,9 @@ func (m *Manager) Delete(srcIP, dstIP net.IP) (err error) {
 		return
 	}
 
-	if err = m.conn.Flush(); err != nil {
-		return
+	if err = m.conn.Flush(); errors.Is(err, os.ErrNotExist) {
+		err = nil // элемент уже отсутствует — удаление идемпотентно
 	}
-
 	return
 }
 

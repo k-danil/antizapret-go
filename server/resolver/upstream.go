@@ -51,6 +51,12 @@ func NewClassicUpstream(name, dsn string, timeout time.Duration) (r *ClassicUpst
 }
 
 func (r *ClassicUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+	}
+
 	resp, _, err = r.client.Exchange(ctx, req, r.schema, r.host)
 	if err != nil || resp == nil {
 		req.Rcode = dns.RcodeServerFailure

@@ -45,7 +45,7 @@ func (c *Cache) GetResponse(req *dns.Msg) (resp *dns.Msg) {
 		return
 	}
 
-	itemTTL := item.ExpiresAt().Sub(time.Now())
+	itemTTL := time.Until(item.ExpiresAt())
 	if itemTTL < MinCacheableTTL {
 		return
 	}
@@ -66,7 +66,7 @@ func (c *Cache) GetResponse(req *dns.Msg) (resp *dns.Msg) {
 func (c *Cache) GetResponseLambda(req *dns.Msg, lambda func() (*dns.Msg, time.Duration, error)) (resp *dns.Msg) {
 	resp = c.GetResponse(req)
 	if resp != nil {
-		return resp.Copy()
+		return resp
 	}
 
 	var ttl time.Duration
@@ -89,12 +89,19 @@ func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 		return
 	}
 
+	if resp.Rcode != dns.RcodeSuccess && resp.Rcode != dns.RcodeNameError {
+		return
+	}
+
 	if ttl == DefaultTTL {
 		ttlUint := uint32(math.MaxUint32)
 		for _, rr := range [][]dns.RR{resp.Answer, resp.Ns, resp.Extra} {
 			for _, a := range rr {
 				ttlUint = min(ttlUint, a.Header().TTL)
 			}
+		}
+		if ttlUint == math.MaxUint32 {
+			return
 		}
 		ttl = time.Duration(ttlUint) * time.Second
 	}
