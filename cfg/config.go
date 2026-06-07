@@ -55,6 +55,7 @@ type Matcher struct {
 	Source     string     `yaml:"source"`
 	Format     string     `yaml:"format"`
 	Subdomains *bool      `yaml:"subdomains"`
+	Prune      bool       `yaml:"prune"`
 	Regexp     *Regexp    `yaml:"regexp,omitempty"`
 	Filter     *Filter    `yaml:"filter,omitempty"`
 }
