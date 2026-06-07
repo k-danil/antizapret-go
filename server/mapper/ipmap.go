@@ -7,9 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/antizapret-vpn/go-proxy/server/nft"
 	"github.com/antizapret-vpn/go-proxy/utils"
 )
+
+type nftProgrammer interface {
+	Add(fakeIP, realIP net.IP, comment string) error
+	Delete(fakeIP, realIP net.IP) error
+}
 
 type IPMapper struct {
 	used *utils.SafeTTLMap[uint32, uint32]
@@ -17,14 +21,14 @@ type IPMapper struct {
 
 	ttl time.Duration
 
-	nft *nft.Manager
+	nft nftProgrammer
 
 	// allocMu сериализует холодные пути (аллокация в Map, teardown в Clean),
 	// чтобы переаллокация real не пересекалась с его удалением.
 	allocMu sync.Mutex
 }
 
-func NewIPMapper(cidr string, ttl time.Duration, nft *nft.Manager) (m *IPMapper, err error) {
+func NewIPMapper(cidr string, ttl time.Duration, nft nftProgrammer) (m *IPMapper, err error) {
 	var ipnet *net.IPNet
 	if _, ipnet, err = net.ParseCIDR(cidr); err != nil {
 		err = fmt.Errorf("failed to parse CIDR: %w", err)
@@ -42,8 +46,8 @@ func NewIPMapper(cidr string, ttl time.Duration, nft *nft.Manager) (m *IPMapper,
 	return m, nil
 }
 
-func (m *IPMapper) Map(real net.IP, host string) (fake net.IP, err error) {
-	realUint := utils.IPToUint32(real)
+func (m *IPMapper) Map(realIP net.IP, host string) (fake net.IP, err error) {
+	realUint := utils.IPToUint32(realIP)
 
 	if fakeUint, ok := m.used.Get(realUint); ok {
 		return utils.Uint32ToIP(fakeUint), nil
@@ -62,7 +66,7 @@ func (m *IPMapper) Map(real net.IP, host string) (fake net.IP, err error) {
 		return
 	}
 
-	if err = m.nft.Add(utils.Uint32ToIP(fakeUint), real, fmt.Sprintf("host %s", host)); err != nil {
+	if err = m.nft.Add(utils.Uint32ToIP(fakeUint), realIP, fmt.Sprintf("host %s", host)); err != nil {
 		m.free.EnqueueTail(fakeUint)
 		return
 	}

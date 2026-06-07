@@ -48,17 +48,17 @@ func NewNftManager(chainName, setName string) (m *Manager, err error) {
 	return
 }
 
-func (m *Manager) Add(fake, real net.IP, comment string) (err error) {
+func (m *Manager) Add(fakeIP, realIP net.IP, comment string) (err error) {
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("failed to add `%s -> %s` to set: %w", fake, real, err)
+			err = fmt.Errorf("failed to add `%s -> %s` to set: %w", fakeIP, realIP, err)
 		}
 	}()
 
 	if err = m.conn.SetAddElements(m.set, []nftables.SetElement{
 		{
-			Key:     fake.To4(),
-			Val:     real.To4(),
+			Key:     fakeIP.To4(),
+			Val:     realIP.To4(),
 			Comment: comment,
 		},
 	}); err != nil {
@@ -72,15 +72,15 @@ func (m *Manager) Add(fake, real net.IP, comment string) (err error) {
 	return
 }
 
-func (m *Manager) Delete(fake, real net.IP) (err error) {
+func (m *Manager) Delete(fakeIP, realIP net.IP) (err error) {
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("failed to delete `%s -> %s` from set: %w", fake, real, err)
+			err = fmt.Errorf("failed to delete `%s -> %s` from set: %w", fakeIP, realIP, err)
 		}
 	}()
 
 	if err = m.conn.SetDeleteElements(m.set, []nftables.SetElement{
-		{Key: fake.To4(), Val: real.To4()},
+		{Key: fakeIP.To4(), Val: realIP.To4()},
 	}); err != nil {
 		return
 	}
