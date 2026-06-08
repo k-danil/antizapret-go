@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	codeberg.org/miekg/dns v0.6.80
+	github.com/coreos/go-iptables v0.8.0
 	github.com/google/nftables v0.3.0
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	go.etcd.io/bbolt v1.4.3

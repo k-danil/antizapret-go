@@ -25,11 +25,19 @@ type Upstream struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
 
-type Nft struct {
-	Set   string        `yaml:"set"`
-	Chain string        `yaml:"chain"`
-	TTL   time.Duration `yaml:"ttl"`
+type Firewall struct {
+	Backend BackendType   `yaml:"backend"` // nft | iptables
+	Set     string        `yaml:"set"`     // только для nft
+	Chain   string        `yaml:"chain"`
+	TTL     time.Duration `yaml:"ttl"`
 }
+
+type BackendType string
+
+const (
+	BackendNFT      BackendType = "nft"
+	BackendIPTables BackendType = "iptables"
+)
 
 type RouterType string
 
@@ -75,7 +83,7 @@ type AntizapretConfig struct {
 	Policy          Policy        `yaml:"policy"`
 	FakeCIDR        string        `yaml:"fake_cidr"`
 	Cache           Cache         `yaml:"cache"`
-	NFT             Nft           `yaml:"nft"`
+	Firewall        Firewall      `yaml:"firewall"`
 	RequestTimeout  time.Duration `yaml:"request_timeout"`
 	LoggingSeverity string        `yaml:"logging_severity"`
 	StatePath       string        `yaml:"state_path"`
@@ -105,7 +113,8 @@ cache:
   ttl: 24h
   min_ttl: 1m
   max_ttl: 24h
-nft:
+firewall:
+  backend: nft
   set: "ANTIZAPRET_SET"
   chain: "ANTIZAPRET_CHAIN"
   ttl: 5m

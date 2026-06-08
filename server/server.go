@@ -3,30 +3,22 @@ package server
 import (
 	"context"
 	"errors"
-	"net"
 	"os"
 	"time"
 
 	"github.com/antizapret-vpn/go-proxy/cfg"
 	"github.com/antizapret-vpn/go-proxy/log"
 	"github.com/antizapret-vpn/go-proxy/server/cache"
+	"github.com/antizapret-vpn/go-proxy/server/firewall"
 	"github.com/antizapret-vpn/go-proxy/server/mapper"
 	"github.com/antizapret-vpn/go-proxy/server/resolver"
 	rtr "github.com/antizapret-vpn/go-proxy/server/router"
 )
 
-// NFTManager — то, что серверу нужно от nft-слоя; инъектируется снаружи, чтобы
-// пакет server не зависел от Linux-only nftables на этапе компиляции.
-type NFTManager interface {
-	Add(fakeIP, realIP net.IP, comment string) error
-	Delete(fakeIP, realIP net.IP) error
-	Close() error
-}
-
 type Server struct {
 	resolver    *resolver.Resolver
 	ipMapper    *mapper.IPMapper
-	nftManager  NFTManager
+	fw          firewall.Manager
 	router      *rtr.Router
 	routerStore *rtr.Store
 	cache       *cache.Cache
@@ -34,11 +26,11 @@ type Server struct {
 	timeout time.Duration
 }
 
-func NewServer(cfg cfg.AntizapretConfig, nftManager NFTManager) (s *Server, err error) {
+func NewServer(cfg cfg.AntizapretConfig, fw firewall.Manager) (s *Server, err error) {
 	s = new(Server)
-	s.nftManager = nftManager
+	s.fw = fw
 
-	if s.ipMapper, err = mapper.NewIPMapper(cfg.FakeCIDR, cfg.NFT.TTL, s.nftManager); err != nil {
+	if s.ipMapper, err = mapper.NewIPMapper(cfg.FakeCIDR, cfg.Firewall.TTL, s.fw); err != nil {
 		return
 	}
 
@@ -115,7 +107,7 @@ func (s *Server) Close() (err error) {
 	if err := s.cache.Close(); err != nil {
 		errS = append(errS, err)
 	}
-	if err := s.nftManager.Close(); err != nil {
+	if err := s.fw.Close(); err != nil {
 		errS = append(errS, err)
 	}
 	if s.routerStore != nil {
