@@ -13,10 +13,23 @@ import (
 	"github.com/antizapret-vpn/go-proxy/cfg"
 	"github.com/antizapret-vpn/go-proxy/log"
 	"github.com/antizapret-vpn/go-proxy/server"
-	"github.com/antizapret-vpn/go-proxy/server/nft"
+	"github.com/antizapret-vpn/go-proxy/server/firewall"
+	"github.com/antizapret-vpn/go-proxy/server/firewall/iptables"
+	"github.com/antizapret-vpn/go-proxy/server/firewall/nft"
 )
 
 const shutdownTimeout = 5 * time.Second
+
+func newFirewall(c cfg.Firewall, fakeCIDR string) (firewall.Manager, error) {
+	switch c.Backend {
+	case cfg.BackendIPTables:
+		return iptables.New(c.Chain, fakeCIDR)
+	case cfg.BackendNFT, "":
+		return nft.NewNftManager(c.Chain, c.Set)
+	default:
+		return nil, fmt.Errorf("unknown firewall backend `%s`", c.Backend)
+	}
+}
 
 func main() {
 	log.L.Infow("starting",
@@ -56,20 +69,20 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	nftManager, err := nft.NewNftManager(cfg.Antizapret.NFT.Chain, cfg.Antizapret.NFT.Set)
+	fw, err := newFirewall(cfg.Antizapret.Firewall, cfg.Antizapret.FakeCIDR)
 	if err != nil {
-		log.L.Fatalw("Error creating nft manager",
+		log.L.Fatalw("Error creating firewall backend",
 			"err", err)
 	}
 
-	srv, err := server.NewServer(cfg.Antizapret, nftManager)
+	srv, err := server.NewServer(cfg.Antizapret, fw)
 	if err != nil {
 		log.L.Fatalw("Error creating server",
 			"err", err)
 	}
 	defer func() { _ = srv.Close() }()
 
-	go srv.NFTCleaner(ctx, cfg.Antizapret.NFT.TTL)
+	go srv.NFTCleaner(ctx, cfg.Antizapret.Firewall.TTL)
 
 	go func() {
 		sig := make(chan os.Signal, 1)
