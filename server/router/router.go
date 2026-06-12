@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/antizapret-vpn/go-proxy/cfg"
-	"github.com/antizapret-vpn/go-proxy/log"
-	"github.com/antizapret-vpn/go-proxy/utils"
+	"github.com/k-danil/antizapret-go/cfg"
+	"github.com/k-danil/antizapret-go/log"
+	"github.com/k-danil/antizapret-go/utils"
 )
 
 type Router struct {

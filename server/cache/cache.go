@@ -95,16 +95,32 @@ func (c *Cache) SetResponse(req, resp *dns.Msg, ttl time.Duration) {
 	}
 
 	if ttl == DefaultTTL {
-		ttlUint := uint32(math.MaxUint32)
-		for _, rr := range [][]dns.RR{resp.Answer, resp.Ns, resp.Extra} {
-			for _, a := range rr {
-				ttlUint = min(ttlUint, a.Header().TTL)
+		if resp.Rcode == dns.RcodeNameError {
+			// RFC 2308: негативный TTL = min(TTL заголовка SOA, SOA.MINIMUM);
+			// NXDOMAIN без SOA в authority негативно не кэшируется
+			var soa *dns.SOA
+			for _, rr := range resp.Ns {
+				if s, ok := rr.(*dns.SOA); ok {
+					soa = s
+					break
+				}
 			}
+			if soa == nil {
+				return
+			}
+			ttl = time.Duration(min(soa.Hdr.TTL, soa.Minttl)) * time.Second
+		} else {
+			ttlUint := uint32(math.MaxUint32)
+			for _, rr := range [][]dns.RR{resp.Answer, resp.Ns, resp.Extra} {
+				for _, a := range rr {
+					ttlUint = min(ttlUint, a.Header().TTL)
+				}
+			}
+			if ttlUint == math.MaxUint32 {
+				return
+			}
+			ttl = time.Duration(ttlUint) * time.Second
 		}
-		if ttlUint == math.MaxUint32 {
-			return
-		}
-		ttl = time.Duration(ttlUint) * time.Second
 	}
 
 	if ttl > c.maxTTL {

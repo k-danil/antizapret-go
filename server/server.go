@@ -6,13 +6,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/antizapret-vpn/go-proxy/cfg"
-	"github.com/antizapret-vpn/go-proxy/log"
-	"github.com/antizapret-vpn/go-proxy/server/cache"
-	"github.com/antizapret-vpn/go-proxy/server/firewall"
-	"github.com/antizapret-vpn/go-proxy/server/mapper"
-	"github.com/antizapret-vpn/go-proxy/server/resolver"
-	rtr "github.com/antizapret-vpn/go-proxy/server/router"
+	"github.com/k-danil/antizapret-go/cfg"
+	"github.com/k-danil/antizapret-go/log"
+	"github.com/k-danil/antizapret-go/server/cache"
+	"github.com/k-danil/antizapret-go/server/firewall"
+	"github.com/k-danil/antizapret-go/server/mapper"
+	"github.com/k-danil/antizapret-go/server/resolver"
+	rtr "github.com/k-danil/antizapret-go/server/router"
 )
 
 type Server struct {

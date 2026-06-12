@@ -18,9 +18,13 @@ fake_cidr: "10.30.0.0/15"
 cache:
   capacity: 20000
   ttl: 24h
-nft:
-  set: "ANTIZAPRET_SET"
+  min_ttl: 1m
+  max_ttl: 24h
+firewall:
+  backend: nft            # nft | iptables
+  set: "ANTIZAPRET_SET"   # только для nft
   chain: "ANTIZAPRET_CHAIN"
   ttl: 5m
 request_timeout: 2s
 logging_severity: "debug"
+state_path: "/var/lib/antizapret-go/state.db"

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/antizapret-vpn/go-proxy/utils"
+	"github.com/k-danil/antizapret-go/utils"
 )
 
 type fakeNFT struct {

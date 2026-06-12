@@ -5,7 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/antizapret-vpn/go-proxy/log"
+	"github.com/go-playground/validator/v10"
+	"github.com/k-danil/antizapret-go/log"
 	"go.uber.org/config"
 )
 
@@ -39,6 +40,10 @@ func readConfig(configFilename, defaultConfig string, target interface{}) error 
 
 	if err = provider.Get(config.Root).Populate(target); err != nil {
 		return err
+	}
+
+	if err = validator.New(validator.WithRequiredStructEnabled()).Struct(target); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
 	}
 
 	log.L.Infow("Configuration loaded",
