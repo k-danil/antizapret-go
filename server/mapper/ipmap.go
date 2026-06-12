@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/antizapret-vpn/go-proxy/utils"
+	"github.com/k-danil/antizapret-go/utils"
 )
 
 type nftProgrammer interface {

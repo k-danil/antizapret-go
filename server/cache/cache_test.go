@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"codeberg.org/miekg/dns"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func aQuery(name string) *dns.Msg {
@@ -23,6 +25,29 @@ func aResp(name string, rcode uint16, answerTTL uint32, withAnswer bool) *dns.Ms
 	return m
 }
 
+func nxResp(name string, soaTTL, soaMin uint32, withSOA bool) *dns.Msg {
+	m := aQuery(name)
+	m.Rcode = dns.RcodeNameError
+	if withSOA {
+		soa := &dns.SOA{Hdr: dns.Header{Name: "test.", Class: dns.ClassINET, TTL: soaTTL}}
+		soa.Ns = "ns.test."
+		soa.Mbox = "host.test."
+		soa.Minttl = soaMin
+		m.Ns = []dns.RR{soa}
+	}
+	return m
+}
+
+func effectiveTTL(m *dns.Msg) uint32 {
+	if len(m.Answer) > 0 {
+		return m.Answer[0].Header().TTL
+	}
+	if len(m.Ns) > 0 {
+		return m.Ns[0].Header().TTL
+	}
+	return 0
+}
+
 func TestSetResponseCachingRules(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -32,9 +57,11 @@ func TestSetResponseCachingRules(t *testing.T) {
 	}{
 		{"success with cacheable ttl", aResp("a.test.", dns.RcodeSuccess, 600, true), DefaultTTL, true},
 		{"servfail not cached", aResp("a.test.", dns.RcodeServerFailure, 600, false), DefaultTTL, false},
-		{"nxdomain with explicit ttl cached", aResp("a.test.", dns.RcodeNameError, 0, false), 24 * time.Hour, true},
+		{"nxdomain with explicit ttl cached", nxResp("a.test.", 0, 0, false), 24 * time.Hour, true},
 		{"success empty records not cached", aResp("a.test.", dns.RcodeSuccess, 0, false), DefaultTTL, false},
 		{"success short ttl cached (clamped up)", aResp("a.test.", dns.RcodeSuccess, 3, true), DefaultTTL, true},
+		{"nxdomain with soa cached (rfc 2308)", nxResp("a.test.", 600, 60, true), DefaultTTL, true},
+		{"nxdomain without soa not cached", nxResp("a.test.", 0, 0, false), DefaultTTL, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -43,57 +70,65 @@ func TestSetResponseCachingRules(t *testing.T) {
 
 			req := aQuery("a.test.")
 			c.SetResponse(req, tc.resp, tc.ttl)
-			if got := c.GetResponse(req) != nil; got != tc.cached {
-				t.Fatalf("cached = %v, want %v", got, tc.cached)
+			got := c.GetResponse(req)
+			if tc.cached {
+				require.NotNil(t, got)
+			} else {
+				require.Nil(t, got)
 			}
 		})
 	}
 }
 
-func TestCacheClampsTTL(t *testing.T) {
-	c := NewCache(100, time.Hour, 60*time.Second, 3600*time.Second)
-	defer func() { _ = c.Close() }()
-
-	reqShort := aQuery("short.test.")
-	c.SetResponse(reqShort, aResp("short.test.", dns.RcodeSuccess, 5, true), DefaultTTL)
-	short := c.GetResponse(reqShort)
-	if short == nil {
-		t.Fatal("short-ttl answer must be cached (clamped up to min)")
+func TestCacheTTLClamping(t *testing.T) {
+	tests := []struct {
+		name                    string
+		resp                    *dns.Msg
+		wantTTLLow, wantTTLHigh uint32
+	}{
+		{"short ttl clamped up to min", aResp("a.test.", dns.RcodeSuccess, 5, true), 55, 60},
+		{"long ttl capped at max", aResp("a.test.", dns.RcodeSuccess, 360000, true), 3595, 3600},
+		{"negative ttl from soa minimum", nxResp("a.test.", 600, 90, true), 85, 90},
 	}
-	if got := short.Answer[0].Header().TTL; got < 55 || got > 60 {
-		t.Fatalf("min-clamped ttl = %d, want ~60", got)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCache(100, time.Hour, 60*time.Second, 3600*time.Second)
+			defer func() { _ = c.Close() }()
 
-	reqLong := aQuery("long.test.")
-	c.SetResponse(reqLong, aResp("long.test.", dns.RcodeSuccess, 360000, true), DefaultTTL)
-	long := c.GetResponse(reqLong)
-	if long == nil {
-		t.Fatal("long-ttl answer must be cached")
-	}
-	if got := long.Answer[0].Header().TTL; got < 3595 || got > 3600 {
-		t.Fatalf("max-capped ttl = %d, want ~3600", got)
-	}
-}
+			req := aQuery("a.test.")
+			c.SetResponse(req, tc.resp, DefaultTTL)
+			got := c.GetResponse(req)
+			require.NotNil(t, got, "response must be cached")
 
-func TestCacheKeyDistinguishesType(t *testing.T) {
-	c := NewCache(10, time.Hour, time.Second, time.Hour)
-	defer func() { _ = c.Close() }()
-
-	a := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}}
-	aaaa := &dns.Msg{Question: []dns.RR{&dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}}
-	if c.calculateCacheKey(a) == c.calculateCacheKey(aaaa) {
-		t.Fatal("A and AAAA must not collapse to the same cache key")
+			ttl := effectiveTTL(got)
+			assert.GreaterOrEqual(t, ttl, tc.wantTTLLow)
+			assert.LessOrEqual(t, ttl, tc.wantTTLHigh)
+		})
 	}
 }
 
-func TestCacheKeyNormalizesName(t *testing.T) {
-	c := NewCache(10, time.Hour, time.Second, time.Hour)
-	defer func() { _ = c.Close() }()
+func TestCalculateCacheKey(t *testing.T) {
+	aaaaQuery := &dns.Msg{Question: []dns.RR{&dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}}
 
-	upper := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "Example.COM.", Class: dns.ClassINET}}}}
-	lower := &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}}
-	if c.calculateCacheKey(upper) != c.calculateCacheKey(lower) {
-		t.Fatal("case and trailing dot must normalize to the same key")
+	tests := []struct {
+		name     string
+		a, b     *dns.Msg
+		wantSame bool
+	}{
+		{"qtype distinguishes keys", aQuery("example.com."), aaaaQuery, false},
+		{"case normalizes to same key", aQuery("Example.COM."), aQuery("example.com."), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCache(10, time.Hour, time.Second, time.Hour)
+			defer func() { _ = c.Close() }()
+
+			if tc.wantSame {
+				assert.Equal(t, c.calculateCacheKey(tc.a), c.calculateCacheKey(tc.b))
+			} else {
+				assert.NotEqual(t, c.calculateCacheKey(tc.a), c.calculateCacheKey(tc.b))
+			}
+		})
 	}
 }
 
@@ -111,7 +146,5 @@ func TestGetResponseLambdaCachesOnMiss(t *testing.T) {
 	c.GetResponseLambda(req, lambda)
 	c.GetResponseLambda(req, lambda)
 
-	if calls != 1 {
-		t.Fatalf("lambda called %d times, want 1 (second call must hit cache)", calls)
-	}
+	assert.Equal(t, 1, calls, "second call must hit cache")
 }

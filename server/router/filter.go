@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/antizapret-vpn/go-proxy/cfg"
+	"github.com/k-danil/antizapret-go/cfg"
 )
 
 type Filter struct {

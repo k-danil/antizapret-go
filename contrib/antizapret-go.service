@@ -1,0 +1,62 @@
+# systemd-юнит для antizapret-go.
+#
+# Предполагает:
+#   бинарь  — /usr/local/bin/antizapret-go
+#   конфиг  — /etc/antizapret-go/config.yaml
+#   стейт   — /var/lib/antizapret-go/  (создаётся через StateDirectory;
+#             совпадает с дефолтным state_path в конфиге)
+#
+# Установка:
+#   install -Dm755 build/antizapret_go /usr/local/bin/antizapret-go
+#   install -Dm644 contrib/antizapret-go.service /etc/systemd/system/antizapret-go.service
+#   mkdir -p /etc/antizapret-go && ./antizapret-go -default-config > /etc/antizapret-go/config.yaml
+#   systemctl daemon-reload && systemctl enable --now antizapret-go
+#
+# Перечитать списки без рестарта:  systemctl reload antizapret-go
+
+[Unit]
+Description=antizapret-go — selective DNS proxy
+Documentation=https://github.com/k-danil/antizapret-go
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/antizapret-go -config /etc/antizapret-go/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+
+# Привилегии: nft/iptables → CAP_NET_ADMIN; bind на :53 → CAP_NET_BIND_SERVICE.
+# Юнит работает от root; capability-bound минимизирует поверхность.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+
+# Для firewall.backend: iptables дополнительно требуется CAP_NET_RAW
+# (iptables-legacy ходит в ядро через raw-сокет) и запись в /run
+# (lock-файл /run/xtables.lock); list-директивы systemd аккумулируются,
+# поэтому достаточно раскомментировать:
+#CapabilityBoundingSet=CAP_NET_RAW
+#AmbientCapabilities=CAP_NET_RAW
+#ReadWritePaths=/run
+
+# Persistent state (bbolt): /var/lib/antizapret-go
+StateDirectory=antizapret-go
+StateDirectoryMode=0700
+
+# Sandbox (совместим с netlink/nftables: AF_NETLINK разрешён, модули ядра не трогаем)
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/antizapret-go
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
+
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

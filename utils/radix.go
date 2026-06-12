@@ -146,9 +146,6 @@ func (r *Radix[T]) Get(key string) (T, bool) {
 }
 
 func (n *radixNode[T]) get(s []byte, bestVal T, bestOk bool) (T, bool) {
-	if n.match == MatchPrefix {
-		bestVal, bestOk = n.value, true
-	}
 	if len(s) == 0 {
 		if n.match == MatchExact {
 			return n.value, true

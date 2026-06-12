@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"codeberg.org/miekg/dns"
-	"github.com/antizapret-vpn/go-proxy/cfg"
-	"github.com/antizapret-vpn/go-proxy/log"
-	"github.com/antizapret-vpn/go-proxy/server"
-	"github.com/antizapret-vpn/go-proxy/server/firewall"
-	"github.com/antizapret-vpn/go-proxy/server/firewall/iptables"
-	"github.com/antizapret-vpn/go-proxy/server/firewall/nft"
+	"github.com/k-danil/antizapret-go/cfg"
+	"github.com/k-danil/antizapret-go/log"
+	"github.com/k-danil/antizapret-go/server"
+	"github.com/k-danil/antizapret-go/server/firewall"
+	"github.com/k-danil/antizapret-go/server/firewall/iptables"
+	"github.com/k-danil/antizapret-go/server/firewall/nft"
 )
 
 const shutdownTimeout = 5 * time.Second

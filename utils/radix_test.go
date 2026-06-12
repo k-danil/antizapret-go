@@ -40,6 +40,9 @@ func TestRadix_MatchModes(t *testing.T) {
 		{"a.b.c", 20, true},
 		{"x.a.b.c", 20, true},
 		{"ab.c", 0, false},
+
+		{"examplezz.com", 0, false},
+		{"api.examplezz.com", 0, false},
 	}
 
 	for _, tt := range tests {
@@ -71,7 +74,7 @@ func TestRadix_SplitsAndOverwrites(t *testing.T) {
 		{"abc", "v1", true},
 		{"abcd", "v2", true},
 		{"abx", "v3", true},
-		{"abzzz", "pv", true},
+		{"abzzz", "", false},
 		{"ab", "pv", true},
 		{"a", "", false},
 		{"", "", false},

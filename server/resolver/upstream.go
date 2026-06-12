@@ -57,11 +57,13 @@ func (r *ClassicUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.
 		defer cancel()
 	}
 
-	resp, _, err = r.client.Exchange(ctx, req, r.schema, r.host)
-	if err != nil || resp == nil {
-		req.Rcode = dns.RcodeServerFailure
+	if resp, _, err = r.client.Exchange(ctx, req, r.schema, r.host); err != nil {
+		resp = nil
 		err = fmt.Errorf("upstream `%s` failed: %w", r.name, err)
-		return req, err
+		return
+	}
+	if resp == nil {
+		err = fmt.Errorf("upstream `%s` returned no response", r.name)
 	}
 
 	return
@@ -80,22 +82,23 @@ func NewDoHUpstream(name, dsn string, timeout time.Duration) (r *DoHUpstream, er
 func (r *DoHUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
 	var hreq *http.Request
 	if hreq, err = dnshttp.NewRequest(http.MethodPost, r.url, req); err != nil {
-		req.Rcode = dns.RcodeFormatError
 		err = fmt.Errorf("failed to format DoH request: %w", err)
-		return req, err
+		return
 	}
 
 	var hresp *http.Response
 	if hresp, err = r.client.Do(hreq.WithContext(ctx)); err != nil {
-		req.Rcode = dns.RcodeServerFailure
 		err = fmt.Errorf("upstream `%s` failed: %w", r.name, err)
-		return req, err
+		return
 	}
 
-	if resp, err = dnshttp.Response(hresp); err != nil || resp == nil {
-		req.Rcode = dns.RcodeServerFailure
+	if resp, err = dnshttp.Response(hresp); err != nil {
+		resp = nil
 		err = fmt.Errorf("upstream `%s` failed: %w", r.name, err)
-		return req, err
+		return
+	}
+	if resp == nil {
+		err = fmt.Errorf("upstream `%s` returned no response", r.name)
 	}
 
 	return

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"codeberg.org/miekg/dns"
-	"github.com/antizapret-vpn/go-proxy/cfg"
-	rtr "github.com/antizapret-vpn/go-proxy/server/router"
+	"github.com/k-danil/antizapret-go/cfg"
+	rtr "github.com/k-danil/antizapret-go/server/router"
 )
 
 // captureWriter — минимальный dns.ResponseWriter, складывающий записанные байты.

@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"codeberg.org/miekg/dns"
-	"github.com/antizapret-vpn/go-proxy/log"
-	rtr "github.com/antizapret-vpn/go-proxy/server/router"
-	"github.com/antizapret-vpn/go-proxy/utils"
+	"github.com/k-danil/antizapret-go/log"
+	rtr "github.com/k-danil/antizapret-go/server/router"
+	"github.com/k-danil/antizapret-go/utils"
 )
 
 var blackholeAddr = netip.AddrFrom4([4]byte{127, 6, 6, 6})
@@ -54,10 +54,6 @@ func (s *Server) DNSHandler(ctx context.Context, w dns.ResponseWriter, r *dns.Ms
 			r.Rcode = dns.RcodeServerFailure
 			resp = r
 			return
-		}
-
-		if resp.Rcode == dns.RcodeNameError {
-			ttl = 24 * time.Hour
 		}
 
 		return

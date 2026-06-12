@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"codeberg.org/miekg/dns"
-	"github.com/antizapret-vpn/go-proxy/cfg"
+	"github.com/k-danil/antizapret-go/cfg"
 )
 
 type Resolver struct {

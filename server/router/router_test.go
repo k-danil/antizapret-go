@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/antizapret-vpn/go-proxy/cfg"
+	"github.com/k-danil/antizapret-go/cfg"
 )
 
 func newTestStore(t *testing.T) *Store {
