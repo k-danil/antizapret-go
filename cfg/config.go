@@ -27,7 +27,7 @@ type Upstream struct {
 
 type Firewall struct {
 	Backend BackendType   `yaml:"backend" validate:"omitempty,oneof=nft iptables"`
-	Set     string        `yaml:"set" validate:"required_unless=Backend iptables"` // только для nft
+	Set     string        `yaml:"set" validate:"required_unless=Backend iptables"`
 	Chain   string        `yaml:"chain" validate:"required"`
 	TTL     time.Duration `yaml:"ttl" validate:"gt=0"`
 }
@@ -54,6 +54,7 @@ const (
 
 type Policy struct {
 	ReloadInterval time.Duration `yaml:"reload_interval" validate:"gt=0"`
+	RebuildTimeout time.Duration `yaml:"rebuild_timeout" validate:"gt=0"`
 	Matchers       []Matcher     `yaml:"matchers" validate:"dive"`
 }
 
@@ -79,6 +80,7 @@ type Regexp struct {
 
 type AntizapretConfig struct {
 	Bindings        []Bind        `yaml:"bindings" validate:"min=1,dive"`
+	Processes       int           `yaml:"processes" validate:"omitempty,min=1"`
 	Upstreams       []Upstream    `yaml:"upstreams" validate:"min=1,dive"`
 	Policy          Policy        `yaml:"policy"`
 	FakeCIDR        string        `yaml:"fake_cidr" validate:"required,cidrv4"`
@@ -101,6 +103,7 @@ upstreams:
     timeout: 1s
 policy:
   reload_interval: 6h
+  rebuild_timeout: 1m
   matchers:
     - name: "hosts"
       type: "remap"

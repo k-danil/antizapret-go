@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,7 +20,10 @@ import (
 	"github.com/k-danil/antizapret-go/server/firewall/nft"
 )
 
-const shutdownTimeout = 5 * time.Second
+const (
+	shutdownTimeout = 5 * time.Second
+	edns0UDPSize    = 1232 // DNS flag day 2020
+)
 
 func newFirewall(c cfg.Firewall, fakeCIDR string) (firewall.Manager, error) {
 	switch c.Backend {
@@ -91,7 +96,14 @@ func main() {
 		srv.PolicyRebuilder(ctx, cfg.Antizapret.Policy.ReloadInterval, sig)
 	}()
 
+	srv.WaitReady(ctx)
+
 	dns.HandleFunc(".", srv.DNSHandler)
+
+	processes := cfg.Antizapret.Processes
+	if processes <= 0 {
+		processes = runtime.NumCPU()
+	}
 
 	var servers []*dns.Server
 	for _, u := range cfg.Antizapret.Bindings {
@@ -101,22 +113,47 @@ func main() {
 			log.L.Warnw("DNS server bound to wildcard address; ensure it is not an open resolver",
 				"address", addr, "protocol", protocol)
 		}
-		dnsServer := &dns.Server{Addr: addr, Net: protocol, ReusePort: true, MaxTCPQueries: -1}
-		go func() {
-			if err := dnsServer.ListenAndServe(); err != nil {
-				log.L.Errorw("Error starting DNS server", "addr", addr, "protocol", protocol, "err", err)
-				cancel()
-			}
-		}()
-		servers = append(servers, dnsServer)
+		// несколько листенеров на один адрес — иначе SO_REUSEPORT бессмыслен: с N сокетами
+		// ядро раскидывает приём по ядрам (один сокет = один read-loop).
+		for range processes {
+			dnsServer := &dns.Server{Addr: addr, Net: protocol, ReusePort: true, UDPSize: edns0UDPSize}
+			go func() {
+				if err := dnsServer.ListenAndServe(); err != nil {
+					log.L.Errorw("Error starting DNS server", "addr", addr, "protocol", protocol, "err", err)
+					cancel()
+				}
+			}()
+			servers = append(servers, dnsServer)
+		}
 	}
+	log.L.Infow("DNS listeners started",
+		"bindings", len(cfg.Antizapret.Bindings), "processes_per_binding", processes, "total", len(servers))
 
 	<-ctx.Done()
 	log.L.Infow("Shutting down")
+	shutdownServers(servers)
+}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer shutdownCancel()
-	for _, dnsServer := range servers {
-		dnsServer.Shutdown(shutdownCtx)
+// dns.Server.Shutdown блокируется до завершения in-flight, но переданный ctx игнорирует —
+// поэтому общий бюджет ожидания дренажа держим сами.
+func shutdownServers(servers []*dns.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		var wg sync.WaitGroup
+		for _, s := range servers {
+			wg.Go(func() { s.Shutdown(ctx) })
+		}
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.L.Infow("all DNS listeners stopped")
+	case <-ctx.Done():
+		log.L.Warnw("DNS shutdown timed out; exiting", "timeout", shutdownTimeout)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
+	"sync/atomic"
 
 	"codeberg.org/miekg/dns"
 	"github.com/k-danil/antizapret-go/cfg"
@@ -13,6 +13,7 @@ import (
 
 type Resolver struct {
 	upstreams []Upstream
+	next      atomic.Uint64
 }
 
 func NewResolver(config []cfg.Upstream) (r *Resolver, err error) {
@@ -52,10 +53,10 @@ func (r *Resolver) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, er
 		return
 	}
 	n := len(r.upstreams)
-	start := time.Now().Nanosecond() % n
+	start := int(r.next.Add(1) % uint64(n))
 
 	var errs []error
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if ctx.Err() != nil {
 			errs = append(errs, ctx.Err())
 			break

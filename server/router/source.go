@@ -74,8 +74,6 @@ func (m multiCloserReader) Close() error {
 	return errors.Join(errs...)
 }
 
-// maybeGunzip прозрачно распаковывает gzip по сигнатуре содержимого (0x1f 0x8b) —
-// поддержка .gz-источников (напр. remove-hosts.txt.gz) независимо от расширения.
 func maybeGunzip(raw io.ReadCloser) (io.ReadCloser, error) {
 	br := bufio.NewReader(raw)
 	magic, _ := br.Peek(2)

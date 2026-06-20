@@ -27,7 +27,6 @@ func init() {
 	L = Logger.Sugar()
 }
 
-// noinspection GoUnusedExportedFunction
 func SetDebug(debug bool) {
 	if debug {
 		level.SetLevel(zap.DebugLevel)
@@ -36,7 +35,6 @@ func SetDebug(debug bool) {
 	}
 }
 
-// noinspection GoUnusedExportedFunction
 func SetSeverity(severity string) error {
 	return level.UnmarshalText([]byte(severity))
 }

@@ -19,7 +19,7 @@ func ShowVersion() string {
 	return fmt.Sprintf("%s @ %s", BuildCommitSha, BuildTimestamp)
 }
 
-func readConfig(configFilename, defaultConfig string, target interface{}) error {
+func readConfig(configFilename, defaultConfig string, target any) error {
 	opts := []config.YAMLOption{
 		config.Permissive(),
 		config.Source(strings.NewReader(defaultConfig)),

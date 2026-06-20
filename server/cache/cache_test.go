@@ -1,7 +1,10 @@
 package cache
 
 import (
+	"errors"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -9,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const testName = "a.test"
 
 func aQuery(name string) *dns.Msg {
 	return &dns.Msg{Question: []dns.RR{&dns.A{Hdr: dns.Header{Name: name, Class: dns.ClassINET}}}}
@@ -69,8 +74,8 @@ func TestSetResponseCachingRules(t *testing.T) {
 			defer func() { _ = c.Close() }()
 
 			req := aQuery("a.test.")
-			c.SetResponse(req, tc.resp, tc.ttl)
-			got := c.GetResponse(req)
+			c.SetResponse(req, tc.resp, testName, tc.ttl)
+			got := c.GetResponse(req, testName)
 			if tc.cached {
 				require.NotNil(t, got)
 			} else {
@@ -96,8 +101,8 @@ func TestCacheTTLClamping(t *testing.T) {
 			defer func() { _ = c.Close() }()
 
 			req := aQuery("a.test.")
-			c.SetResponse(req, tc.resp, DefaultTTL)
-			got := c.GetResponse(req)
+			c.SetResponse(req, tc.resp, testName, DefaultTTL)
+			got := c.GetResponse(req, testName)
 			require.NotNil(t, got, "response must be cached")
 
 			ttl := effectiveTTL(got)
@@ -107,29 +112,21 @@ func TestCacheTTLClamping(t *testing.T) {
 	}
 }
 
-func TestCalculateCacheKey(t *testing.T) {
-	aaaaQuery := &dns.Msg{Question: []dns.RR{&dns.AAAA{Hdr: dns.Header{Name: "example.com.", Class: dns.ClassINET}}}}
+func TestCacheKey(t *testing.T) {
+	aKey := cacheKey("example.com", uint16(dns.TypeA), uint16(dns.ClassINET))
 
-	tests := []struct {
-		name     string
-		a, b     *dns.Msg
-		wantSame bool
-	}{
-		{"qtype distinguishes keys", aQuery("example.com."), aaaaQuery, false},
-		{"case normalizes to same key", aQuery("Example.COM."), aQuery("example.com."), true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			c := NewCache(10, time.Hour, time.Second, time.Hour)
-			defer func() { _ = c.Close() }()
+	require.Equal(t, aKey, cacheKey("example.com", uint16(dns.TypeA), uint16(dns.ClassINET)), "детерминирован")
+	require.NotEqual(t, aKey, cacheKey("example.com", uint16(dns.TypeAAAA), uint16(dns.ClassINET)), "qtype различает ключи")
+	require.NotEqual(t, aKey, cacheKey("other.com", uint16(dns.TypeA), uint16(dns.ClassINET)), "имя различает ключи")
+}
 
-			if tc.wantSame {
-				assert.Equal(t, c.calculateCacheKey(tc.a), c.calculateCacheKey(tc.b))
-			} else {
-				assert.NotEqual(t, c.calculateCacheKey(tc.a), c.calculateCacheKey(tc.b))
-			}
-		})
-	}
+func TestCacheBypassEmptyName(t *testing.T) {
+	c := NewCache(10, time.Hour, time.Second, time.Hour)
+	defer func() { _ = c.Close() }()
+
+	req := aQuery("a.test.")
+	c.SetResponse(req, aResp("a.test.", dns.RcodeSuccess, 600, true), "", DefaultTTL)
+	require.Nil(t, c.GetResponse(req, ""), "пустое имя не кэшируется и всегда промах")
 }
 
 func TestGetResponseLambdaCachesOnMiss(t *testing.T) {
@@ -143,8 +140,89 @@ func TestGetResponseLambdaCachesOnMiss(t *testing.T) {
 		return aResp("a.test.", dns.RcodeSuccess, 600, true), DefaultTTL, nil
 	}
 
-	c.GetResponseLambda(req, lambda)
-	c.GetResponseLambda(req, lambda)
+	c.GetResponseLambda(req, testName, lambda)
+	c.GetResponseLambda(req, testName, lambda)
 
 	assert.Equal(t, 1, calls, "second call must hit cache")
+}
+
+func TestGetResponseLambdaSingleflight(t *testing.T) {
+	c := NewCache(100, time.Hour, time.Second, time.Hour)
+	defer func() { _ = c.Close() }()
+
+	req := aQuery("a.test.")
+	var calls atomic.Int64
+	lambda := func() (*dns.Msg, time.Duration, error) {
+		calls.Add(1)
+		time.Sleep(20 * time.Millisecond) // окно для коалесценса конкурентных промахов
+		return aResp("a.test.", dns.RcodeSuccess, 600, true), DefaultTTL, nil
+	}
+
+	const n = 50
+	results := make([]*dns.Msg, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			results[i] = c.GetResponseLambda(req, testName, lambda)
+		})
+	}
+	wg.Wait()
+
+	require.Equal(t, int64(1), calls.Load(), "конкурентные промахи одного ключа → один резолв в апстрим")
+	for i := range n {
+		require.NotNil(t, results[i], "каждый вызывающий получает ответ")
+	}
+}
+
+func TestGetResponseReturnsIndependentRRs(t *testing.T) {
+	c := NewCache(100, time.Hour, time.Second, time.Hour)
+	defer func() { _ = c.Close() }()
+
+	req := aQuery("a.test.")
+	c.SetResponse(req, aResp("a.test.", dns.RcodeSuccess, 600, true), testName, DefaultTTL)
+
+	r1 := c.GetResponse(req, testName)
+	r2 := c.GetResponse(req, testName)
+	require.NotNil(t, r1)
+	require.NotNil(t, r2)
+	require.NotSame(t, r1.Answer[0].(*dns.A), r2.Answer[0].(*dns.A),
+		"каждая отдача — своя копия RR, не общий объект кэша")
+
+	// конкурентные hit'ы одного ключа не должны гонять по общему RR (под -race)
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			for range 100 {
+				_ = c.GetResponse(req, testName)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func TestGetResponseLambdaNilOnFailure(t *testing.T) {
+	c := NewCache(10, time.Hour, time.Second, time.Hour)
+	defer func() { _ = c.Close() }()
+
+	req := aQuery("a.test.")
+	resp := c.GetResponseLambda(req, testName, func() (*dns.Msg, time.Duration, error) {
+		return nil, 0, errors.New("resolve failed")
+	})
+	require.Nil(t, resp, "на сбое lambda кэш отдаёт nil — хэндлер синтезирует свой SERVFAIL")
+
+	// сбой не должен кэшироваться: следующий вызов реально резолвит
+	called := false
+	resp = c.GetResponseLambda(req, testName, func() (*dns.Msg, time.Duration, error) {
+		called = true
+		return aResp("a.test.", dns.RcodeSuccess, 60, true), DefaultTTL, nil
+	})
+	require.True(t, called, "сбой не должен был закэшироваться")
+	require.NotNil(t, resp)
+}
+
+func BenchmarkCacheKey(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = cacheKey("www.example.com", uint16(dns.TypeA), uint16(dns.ClassINET))
+	}
 }

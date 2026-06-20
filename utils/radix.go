@@ -36,7 +36,7 @@ func NewRadix[T any]() *Radix[T] {
 	return &Radix[T]{
 		root: &radixNode[T]{},
 		pool: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				return bytes.NewBuffer(make([]byte, 0, 64))
 			},
 		},
@@ -54,7 +54,7 @@ func (r *Radix[T]) Insert(key string, val T, mode MatchMode) {
 		return
 	}
 
-	r.root.insert(r.reverseDomain([]byte(key)), val, mode)
+	r.root.insert(reverseLabels(key), val, mode)
 }
 
 func (n *radixNode[T]) insert(s []byte, val T, mode MatchMode) {
@@ -119,10 +119,7 @@ func (n *radixNode[T]) insert(s []byte, val T, mode MatchMode) {
 }
 
 func commonPrefixLen(a, b []byte) int {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
+	n := min(len(a), len(b))
 	i := 0
 	for i < n && a[i] == b[i] {
 		i++
@@ -139,10 +136,9 @@ func (r *Radix[T]) Get(key string) (T, bool) {
 	b := r.pool.Get().(*bytes.Buffer)
 	defer r.pool.Put(b)
 	b.Reset()
+	reverseLabelsInto(b, key)
 
-	b.WriteString(key)
-
-	return r.root.get(r.reverseDomain(b.Bytes()), zero, false)
+	return r.root.get(b.Bytes(), zero, false)
 }
 
 func (n *radixNode[T]) get(s []byte, bestVal T, bestOk bool) (T, bool) {
@@ -200,7 +196,7 @@ func (r *Radix[T]) PruneBelow(key string) {
 	if key == "" {
 		return
 	}
-	r.root.pruneBelow(r.reverseDomain([]byte(key)))
+	r.root.pruneBelow(reverseLabels(key))
 }
 
 func (n *radixNode[T]) pruneBelow(s []byte) {
@@ -227,28 +223,27 @@ func (n *radixNode[T]) pruneBelow(s []byte) {
 	ch.pruneBelow(s[len(ch.prefix):])
 }
 
-func (r *Radix[T]) reverseDomain(domain []byte) []byte {
-	b := r.pool.Get().(*bytes.Buffer)
-	defer r.pool.Put(b)
-	b.Reset()
-
-	end := len(domain)
+func reverseLabelsInto(b *bytes.Buffer, key string) {
+	end := len(key)
 	for end >= 0 {
 		i := end - 1
-		for i >= 0 && domain[i] != '.' {
+		for i >= 0 && key[i] != '.' {
 			i--
 		}
 		if i+1 < end {
-			b.Write(domain[i+1 : end])
+			b.WriteString(key[i+1 : end])
 			if i > 0 {
 				b.WriteByte('.')
 			}
 		}
 		end = i
 	}
+}
 
-	domain = domain[:b.Len()]
-	copy(domain, b.Bytes())
-
-	return domain
+// reverseLabels возвращает владеемую копию — Insert/PruneBelow сохраняют её как prefix узлов.
+func reverseLabels(key string) []byte {
+	var b bytes.Buffer
+	b.Grow(len(key))
+	reverseLabelsInto(&b, key)
+	return b.Bytes()
 }

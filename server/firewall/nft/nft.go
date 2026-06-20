@@ -5,15 +5,20 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"syscall"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/k-danil/antizapret-go/server/firewall"
 )
 
 const internalNFTMark = `antizapret-go`
 
 type Manager struct {
+	// conn не потокобезопасен: копит батч и шлёт Flush по одному сокету
+	mu sync.Mutex
+
 	conn *nftables.Conn
 
 	set *nftables.Set
@@ -48,18 +53,20 @@ func NewNftManager(chainName, setName string) (m *Manager, err error) {
 	return
 }
 
-func (m *Manager) Add(fakeIP, realIP net.IP, comment string) (err error) {
+func (m *Manager) Add(mp firewall.Mapping) (err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("failed to add `%s -> %s` to set: %w", fakeIP, realIP, err)
+			err = fmt.Errorf("failed to add `%s -> %s` to set: %w", mp.Fake, mp.Real, err)
 		}
 	}()
 
 	if err = m.conn.SetAddElements(m.set, []nftables.SetElement{
 		{
-			Key:     fakeIP.To4(),
-			Val:     realIP.To4(),
-			Comment: comment,
+			Key: mp.Fake.To4(),
+			Val: mp.Real.To4(),
 		},
 	}); err != nil {
 		return
@@ -72,21 +79,43 @@ func (m *Manager) Add(fakeIP, realIP net.IP, comment string) (err error) {
 	return
 }
 
-func (m *Manager) Delete(fakeIP, realIP net.IP) (err error) {
+func (m *Manager) Delete(mp firewall.Mapping) (err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	defer func() {
 		if err != nil {
-			err = fmt.Errorf("failed to delete `%s -> %s` from set: %w", fakeIP, realIP, err)
+			err = fmt.Errorf("failed to delete `%s -> %s` from set: %w", mp.Fake, mp.Real, err)
 		}
 	}()
 
 	if err = m.conn.SetDeleteElements(m.set, []nftables.SetElement{
-		{Key: fakeIP.To4(), Val: realIP.To4()},
+		{Key: mp.Fake.To4(), Val: mp.Real.To4()},
 	}); err != nil {
 		return
 	}
 
 	if err = m.conn.Flush(); errors.Is(err, os.ErrNotExist) {
 		err = nil // элемент уже отсутствует — удаление идемпотентно
+	}
+	return
+}
+
+func (m *Manager) List() (out []firewall.Mapping, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var elems []nftables.SetElement
+	if elems, err = m.conn.GetSetElements(m.set); err != nil {
+		return nil, fmt.Errorf("failed to list set elements: %w", err)
+	}
+
+	out = make([]firewall.Mapping, 0, len(elems))
+	for _, e := range elems {
+		out = append(out, firewall.Mapping{
+			Fake: net.IP(e.Key).To4(),
+			Real: net.IP(e.Val).To4(),
+		})
 	}
 	return
 }
@@ -153,27 +182,24 @@ func (m *Manager) initializeRule(t *nftables.Table, c *nftables.Chain) (err erro
 }
 
 func (m *Manager) initializeSet(name string, t *nftables.Table) (set *nftables.Set, err error) {
-	set, _ = m.conn.GetSetByName(t, name)
-	if set == nil {
-		set = &nftables.Set{
-			Table:    t,
-			Name:     name,
-			IsMap:    true,
-			KeyType:  nftables.TypeIPAddr,
-			DataType: nftables.TypeIPAddr,
-			Comment:  internalNFTMark,
-		}
-		if err = m.conn.AddSet(set, nil); err != nil {
-			return
-		}
-		if err = m.conn.Flush(); err != nil {
-			return
-		}
-	} else {
-		m.conn.FlushSet(set)
-		if err = m.conn.Flush(); err != nil {
-			return
-		}
+	// существующий набор переживает рестарт и усыновляется маппером
+	if set, _ = m.conn.GetSetByName(t, name); set != nil {
+		return
+	}
+
+	set = &nftables.Set{
+		Table:    t,
+		Name:     name,
+		IsMap:    true,
+		KeyType:  nftables.TypeIPAddr,
+		DataType: nftables.TypeIPAddr,
+		Comment:  internalNFTMark,
+	}
+	if err = m.conn.AddSet(set, nil); err != nil {
+		return
+	}
+	if err = m.conn.Flush(); err != nil {
+		return
 	}
 	return
 }

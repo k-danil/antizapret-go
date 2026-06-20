@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/k-danil/antizapret-go/cfg"
 	"github.com/k-danil/antizapret-go/log"
@@ -65,45 +65,28 @@ func NewRouter(matchers []cfg.Matcher, store *Store) (r *Router, err error) {
 	return
 }
 
-// Rebuild — best-effort: сбойный или пустой источник заменяется его last-known-good
-// снимком из store, остальные обновляются; radix подменяется атомарно.
+// Rebuild best-effort: сбойный/пустой источник откатывается на last-known-good из store.
 func (r *Router) Rebuild(ctx context.Context) (err error) {
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, time.Minute)
-	defer cancel()
+	// источники тянутся параллельно, но в radix вставляются в исходном порядке —
+	// last-wins и prune зависят от порядка.
+	results := make([]sourceResult, len(r.sources))
+	var wg sync.WaitGroup
+	for i := range r.sources {
+		wg.Go(func() { results[i] = r.loadSource(ctx, r.sources[i]) })
+	}
+	wg.Wait()
 
 	radix := utils.NewRadix[Action]()
-
 	var (
 		length int
 		errs   []error
 	)
-	for _, s := range r.sources {
-		entries, ferr := r.fetchSource(ctx, s)
-		if ferr == nil && len(entries) > 0 {
-			if serr := r.store.Save(s.Name, entries); serr != nil {
-				log.L.Warnw("failed to persist source cache", "source", s.Name, "err", serr)
-			}
-		} else {
-			// сбой или подозрительно пустой ответ — откатываемся на last-known-good,
-			// чтобы транзиентная проблема источника не меняла поведение прокси
-			var lerr error
-			var cached []Entry
-			if cached, lerr = r.store.Load(s.Name); lerr != nil {
-				if ferr != nil {
-					errs = append(errs, fmt.Errorf("source `%s`: fetch failed (%w), no cache (%v)", s.Name, ferr, lerr))
-					continue
-				}
-				log.L.Warnw("source returned empty, no cache to fall back on", "source", s.Name)
-			} else {
-				log.L.Warnw("source unusable, using cached entries",
-					"source", s.Name, "fetched", len(entries), "err", ferr)
-				entries = cached
-			}
+	for i, s := range r.sources {
+		if results[i].err != nil {
+			errs = append(errs, results[i].err)
 		}
-
-		insertEntries(radix, s.Action, s.Prune, entries)
-		length += len(entries)
+		insertEntries(radix, s.Action, s.Prune, results[i].entries)
+		length += len(results[i].entries)
 	}
 
 	r.r.Store(radix)
@@ -115,8 +98,36 @@ func (r *Router) Rebuild(ctx context.Context) (err error) {
 	return
 }
 
-// LoadCached собирает radix только из персистентного кэша, без сети — для
-// быстрого старта. Возвращает число загруженных записей (0 => холодный старт).
+type sourceResult struct {
+	entries []Entry
+	err     error
+}
+
+// loadSource тянет источник; на сбое или подозрительно пустом ответе откатывается
+// на last-known-good из store, чтобы транзиентная проблема источника не меняла
+// поведение прокси.
+func (r *Router) loadSource(ctx context.Context, s Source) sourceResult {
+	entries, ferr := r.fetchSource(ctx, s)
+	if ferr == nil && len(entries) > 0 {
+		if serr := r.store.Save(s.Name, entries); serr != nil {
+			log.L.Warnw("failed to persist source cache", "source", s.Name, "err", serr)
+		}
+		return sourceResult{entries: entries}
+	}
+
+	cached, lerr := r.store.Load(s.Name)
+	if lerr != nil {
+		if ferr != nil {
+			return sourceResult{err: fmt.Errorf("source `%s`: fetch failed (%w), no cache (%v)", s.Name, ferr, lerr)}
+		}
+		log.L.Warnw("source returned empty, no cache to fall back on", "source", s.Name)
+		return sourceResult{}
+	}
+	log.L.Warnw("source unusable, using cached entries", "source", s.Name, "fetched", len(entries), "err", ferr)
+	return sourceResult{entries: cached}
+}
+
+// LoadCached строит radix только из кэша; 0 => холодный старт (кэша нет).
 func (r *Router) LoadCached() (n int) {
 	radix := utils.NewRadix[Action]()
 	for _, s := range r.sources {

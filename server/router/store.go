@@ -18,7 +18,6 @@ var (
 	errNotCached  = errors.New("source not cached")
 )
 
-// Store — персистентный last-known-good кэш записей по источникам поверх bbolt.
 type Store struct {
 	db *bbolt.DB
 }
