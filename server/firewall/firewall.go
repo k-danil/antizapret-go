@@ -6,8 +6,14 @@ package firewall
 
 import "net"
 
+type Mapping struct {
+	Fake net.IP
+	Real net.IP
+}
+
 type Manager interface {
-	Add(fakeIP, realIP net.IP, comment string) error
-	Delete(fakeIP, realIP net.IP) error
+	Add(m Mapping) error
+	Delete(m Mapping) error
+	List() ([]Mapping, error)
 	Close() error
 }

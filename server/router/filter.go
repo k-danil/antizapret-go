@@ -29,7 +29,6 @@ func newFilter(m cfg.Matcher) (f *Filter, err error) {
 	return
 }
 
-// Keep вызывается на каноническом домене; безопасен при nil-приёмнике.
 func (f *Filter) Keep(domain string) bool {
 	if f == nil {
 		return true

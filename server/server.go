@@ -23,7 +23,10 @@ type Server struct {
 	routerStore *rtr.Store
 	cache       *cache.Cache
 
-	timeout time.Duration
+	timeout        time.Duration
+	rebuildTimeout time.Duration
+	warm           bool
+	rebuildReady   chan struct{}
 }
 
 func NewServer(cfg cfg.AntizapretConfig, fw firewall.Manager) (s *Server, err error) {
@@ -48,24 +51,18 @@ func NewServer(cfg cfg.AntizapretConfig, fw firewall.Manager) (s *Server, err er
 		return
 	}
 
-	if s.router.LoadCached() == 0 {
-		if rebuildErr := s.router.Rebuild(context.Background()); rebuildErr != nil {
-			log.L.Errorw("initial router rebuild failed", "err", rebuildErr)
-		}
-	} else {
-		go func() {
-			if rebuildErr := s.router.Rebuild(context.Background()); rebuildErr != nil {
-				log.L.Errorw("background router refresh failed", "err", rebuildErr)
-			}
-		}()
-	}
-
+	s.warm = s.router.LoadCached() > 0
+	s.rebuildReady = make(chan struct{})
+	s.rebuildTimeout = cfg.Policy.RebuildTimeout
 	s.timeout = cfg.RequestTimeout
 
 	return s, err
 }
 
 func (s *Server) PolicyRebuilder(ctx context.Context, interval time.Duration, reload <-chan os.Signal) {
+	s.rebuild(ctx)
+	close(s.rebuildReady) // разблокирует WaitReady на холодном старте
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -75,14 +72,30 @@ func (s *Server) PolicyRebuilder(ctx context.Context, interval time.Duration, re
 			return
 		case <-reload:
 			log.L.Infow("reloading router")
-			if err := s.router.Rebuild(ctx); err != nil {
-				log.L.Errorw("failed to rebuild router", "err", err)
-			}
+			s.rebuild(ctx)
 		case <-ticker.C:
-			if err := s.router.Rebuild(ctx); err != nil {
-				log.L.Errorw("failed to rebuild router", "err", err)
-			}
+			s.rebuild(ctx)
 		}
+	}
+}
+
+func (s *Server) rebuild(ctx context.Context) {
+	rctx, cancel := context.WithTimeout(ctx, s.rebuildTimeout)
+	defer cancel()
+	if err := s.router.Rebuild(rctx); err != nil {
+		log.L.Errorw("failed to rebuild router", "err", err)
+	}
+}
+
+// WaitReady блокирует выдачу на холодном старте до первого rebuild (bounded его
+// таймаутом, отменяемо через ctx). Тёплый старт обслуживает из кэша сразу.
+func (s *Server) WaitReady(ctx context.Context) {
+	if s.warm {
+		return
+	}
+	select {
+	case <-s.rebuildReady:
+	case <-ctx.Done():
 	}
 }
 

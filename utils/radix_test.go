@@ -5,6 +5,8 @@ import (
 	"math/rand"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestRadix_MatchModes(t *testing.T) {
@@ -48,11 +50,9 @@ func TestRadix_MatchModes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("get_%s", tt.key), func(t *testing.T) {
 			got, ok := r.Get(tt.key)
-			if ok != tt.ok {
-				t.Fatalf("ok mismatch for %q: got %v want %v", tt.key, ok, tt.ok)
-			}
-			if ok && got != tt.wantV {
-				t.Fatalf("value mismatch for %q: got %v want %v", tt.key, got, tt.wantV)
+			require.Equalf(t, tt.ok, ok, "ok for %q", tt.key)
+			if ok {
+				require.Equalf(t, tt.wantV, got, "value for %q", tt.key)
 			}
 		})
 	}
@@ -83,19 +83,17 @@ func TestRadix_SplitsAndOverwrites(t *testing.T) {
 	for _, c := range cases {
 		t.Run("check_"+c.key, func(t *testing.T) {
 			v, ok := r.Get(c.key)
-			if ok != c.found {
-				t.Fatalf("ok mismatch %q: got %v want %v", c.key, ok, c.found)
-			}
-			if ok && v != c.want {
-				t.Fatalf("value mismatch %q: got %q want %q", c.key, v, c.want)
+			require.Equalf(t, c.found, ok, "ok %q", c.key)
+			if ok {
+				require.Equalf(t, c.want, v, "value %q", c.key)
 			}
 		})
 	}
 
 	r.Insert("abc", "v1_overwrite", MatchExact)
-	if v, ok := r.Get("abc"); !ok || v != "v1_overwrite" {
-		t.Fatalf("overwrite failed: got (%v,%v), want (v1_overwrite,true)", v, ok)
-	}
+	v, ok := r.Get("abc")
+	require.True(t, ok)
+	require.Equal(t, "v1_overwrite", v, "overwrite")
 }
 
 func BenchmarkRadix_Get_Simple(b *testing.B) {
@@ -118,8 +116,7 @@ func BenchmarkRadix_Get_Simple(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		k := keys[i%len(keys)]
 		_, _ = r.Get(k)
 	}
@@ -132,7 +129,7 @@ func BenchmarkRadix_Get_Long(b *testing.B) {
 	makeDomain := func(n int) string {
 
 		out := make([]byte, 0, n+n/10)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			out = append(out, base[i%len(base)])
 			if (i+1)%10 == 0 && i != n-1 {
 				out = append(out, '.')
@@ -164,8 +161,7 @@ func BenchmarkRadix_Get_Long(b *testing.B) {
 	rng.Shuffle(len(queries), func(i, j int) { queries[i], queries[j] = queries[j], queries[i] })
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		k := queries[i%len(queries)]
 		_, _ = r.Get(k)
 	}

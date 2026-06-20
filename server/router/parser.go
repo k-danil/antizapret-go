@@ -40,12 +40,20 @@ func newParser(m cfg.Matcher, subdomains bool) (p Parser, err error) {
 	return
 }
 
+const maxLineBytes = 1 << 20 // 1 МиБ: домен ≤255 байт; одна длинная строка не должна обрывать парсинг источника
+
+func newLineScanner(r io.Reader) *bufio.Scanner {
+	s := bufio.NewScanner(r)
+	s.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	return s
+}
+
 type PlainParser struct {
 	subdomains bool
 }
 
 func (p PlainParser) Parse(r io.Reader, emit func(Entry)) error {
-	scanner := bufio.NewScanner(r)
+	scanner := newLineScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -56,7 +64,6 @@ func (p PlainParser) Parse(r io.Reader, emit func(Entry)) error {
 	return scanner.Err()
 }
 
-// RegexpParser — escape-hatch для форматов, не покрытых нативными парсерами.
 type RegexpParser struct {
 	from       *regexp.Regexp
 	to         string
@@ -64,7 +71,7 @@ type RegexpParser struct {
 }
 
 func (p RegexpParser) Parse(r io.Reader, emit func(Entry)) error {
-	scanner := bufio.NewScanner(r)
+	scanner := newLineScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || !p.from.MatchString(line) {

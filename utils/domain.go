@@ -2,6 +2,7 @@ package utils
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/net/idna"
 )
@@ -26,9 +27,22 @@ func NormalizeDomain(s string) string {
 	if s == "" {
 		return ""
 	}
+	if isASCII(s) {
+		// чистый ASCII совпадает с выводом ToASCII — IDNA-преобразование пропускаем
+		return s
+	}
 	ascii, err := lookupProfile.ToASCII(s)
 	if err != nil || ascii == "" {
 		return ""
 	}
 	return ascii
+}
+
+func isASCII(s string) bool {
+	for i := range len(s) {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }

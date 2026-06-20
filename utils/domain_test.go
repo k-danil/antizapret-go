@@ -1,6 +1,10 @@
 package utils
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestNormalizeDomain(t *testing.T) {
 	cases := map[string]string{
@@ -10,16 +14,26 @@ func TestNormalizeDomain(t *testing.T) {
 		// IDN всё ещё конвертится в punycode мягким профилем
 		"президент.рф":              "xn--d1abbgf6aiiy.xn--p1ai",
 		"xn--d1abbgf6aiiy.xn--p1ai": "xn--d1abbgf6aiiy.xn--p1ai",
-		// канонизация: регистр + хвостовая точка + кавычки/пробелы
-		"Example.COM.":  "example.com",
-		" \"quoted.com": "quoted.com",
-		// мусор → пусто
-		"":    "",
-		"...": "",
+		"Example.COM.":              "example.com",
+		" \"quoted.com":             "quoted.com",
+		"":                          "",
+		"...":                       "",
 	}
 	for in, want := range cases {
-		if got := NormalizeDomain(in); got != want {
-			t.Errorf("NormalizeDomain(%q) = %q, want %q", in, got, want)
-		}
+		assert.Equalf(t, want, NormalizeDomain(in), "NormalizeDomain(%q)", in)
+	}
+}
+
+func BenchmarkNormalizeDomainASCII(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		NormalizeDomain("www.example.com")
+	}
+}
+
+func BenchmarkNormalizeDomainIDN(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		NormalizeDomain("президент.рф")
 	}
 }

@@ -4,31 +4,34 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
+	"github.com/k-danil/antizapret-go/log"
+	"github.com/k-danil/antizapret-go/server/firewall"
 	"github.com/k-danil/antizapret-go/utils"
 )
 
-type nftProgrammer interface {
-	Add(fakeIP, realIP net.IP, comment string) error
-	Delete(fakeIP, realIP net.IP) error
-}
+var errNoFreeIPs = errors.New("no free IPs")
 
 type IPMapper struct {
-	used *utils.SafeTTLMap[uint32, uint32]
-	free *utils.SafeQueue[uint32]
+	table *mappingTable
+	pool  *ipPool
 
 	ttl time.Duration
+	fw  firewall.Manager
 
-	nft nftProgrammer
+	sf singleflight.Group
 
-	// allocMu сериализует холодные пути (аллокация в Map, teardown в Clean),
-	// чтобы переаллокация real не пересекалась с его удалением.
-	allocMu sync.Mutex
+	// pending трогает только Clean, а cleanMu сериализует Clean-vs-Clean — отдельная синхронизация не нужна
+	cleanMu sync.Mutex
+	pending []pair
 }
 
-func NewIPMapper(cidr string, ttl time.Duration, nft nftProgrammer) (m *IPMapper, err error) {
+func NewIPMapper(cidr string, ttl time.Duration, fw firewall.Manager) (m *IPMapper, err error) {
 	var ipnet *net.IPNet
 	if _, ipnet, err = net.ParseCIDR(cidr); err != nil {
 		err = fmt.Errorf("failed to parse CIDR: %w", err)
@@ -36,62 +39,104 @@ func NewIPMapper(cidr string, ttl time.Duration, nft nftProgrammer) (m *IPMapper
 	}
 
 	m = &IPMapper{
-		used: utils.NewTTLMap[uint32, uint32](20000, ttl),
-		free: utils.NewQueue[uint32](),
-		ttl:  ttl,
-		nft:  nft,
+		table: newMappingTable(),
+		pool:  newIPPool(ipnet),
+		ttl:   ttl,
+		fw:    fw,
 	}
-	m.free.FillFromIter(utils.GetIPv4HostIterator(ipnet))
 
-	return m, nil
+	if err = m.adopt(); err != nil {
+		return nil, err
+	}
+	return
 }
 
-func (m *IPMapper) Map(realIP net.IP, host string) (fakeIP net.IP, err error) {
-	realUint := utils.IPToUint32(realIP)
-
-	if fakeUint, ok := m.used.Get(realUint); ok {
-		return utils.Uint32ToIP(fakeUint), nil
+func (m *IPMapper) adopt() (err error) {
+	var existing []firewall.Mapping
+	if existing, err = m.fw.List(); err != nil {
+		return fmt.Errorf("failed to list existing mappings: %w", err)
 	}
 
-	m.allocMu.Lock()
-	defer m.allocMu.Unlock()
+	for _, mp := range existing {
+		if mp.Fake.To4() == nil || mp.Real.To4() == nil {
+			// чужой/не-v4 элемент в наборе — не наш; пропускаем (IPToUint32 иначе паникует)
+			log.L.Warnw("skipping non-IPv4 mapping on adopt", "fake", mp.Fake, "real", mp.Real)
+			continue
+		}
 
-	if fakeUint, ok := m.used.Get(realUint); ok {
-		return utils.Uint32ToIP(fakeUint), nil
+		fakeU := utils.IPToUint32(mp.Fake)
+		realU := utils.IPToUint32(mp.Real)
+
+		if !m.pool.inRange(fakeU) || m.pool.isAdopted(fakeU) || m.table.has(realU) {
+			if delErr := m.fw.Delete(mp); delErr != nil {
+				log.L.Warnw("failed to drop stale mapping on adopt",
+					"fake", mp.Fake, "real", mp.Real, "err", delErr)
+			}
+			continue
+		}
+
+		m.pool.markAdopted(fakeU)
+		m.table.set(realU, fakeU)
+	}
+	return
+}
+
+func (m *IPMapper) Map(realIP net.IP) (fakeIP net.IP, err error) {
+	realU := utils.IPToUint32(realIP)
+
+	if fakeU, ok := m.table.get(realU); ok {
+		return utils.Uint32ToIP(fakeU), nil
 	}
 
-	fakeUint, ok := m.free.Dequeue()
-	if !ok {
-		err = fmt.Errorf("no free IPs")
+	v, doErr, _ := m.sf.Do(strconv.FormatUint(uint64(realU), 10), func() (any, error) {
+		// singleflight коалесцирует лишь конкурентные вызовы; после закрытия ключа нужен повторный get
+		if fakeU, ok := m.table.get(realU); ok {
+			return fakeU, nil
+		}
+
+		fakeU, ok := m.pool.allocate()
+		if !ok {
+			return uint32(0), errNoFreeIPs
+		}
+		if addErr := m.fw.Add(firewall.Mapping{Fake: utils.Uint32ToIP(fakeU), Real: realIP}); addErr != nil {
+			m.pool.release(fakeU)
+			return uint32(0), addErr
+		}
+		m.table.set(realU, fakeU)
+		return fakeU, nil
+	})
+	if doErr != nil {
+		err = doErr
 		return
 	}
 
-	if err = m.nft.Add(utils.Uint32ToIP(fakeUint), realIP, fmt.Sprintf("host %s", host)); err != nil {
-		m.free.EnqueueTail(fakeUint)
-		return
-	}
-
-	m.used.Set(realUint, fakeUint)
-	return utils.Uint32ToIP(fakeUint), nil
+	fakeIP = utils.Uint32ToIP(v.(uint32))
+	return
 }
 
 func (m *IPMapper) Clean() (err error) {
-	m.allocMu.Lock()
-	defer m.allocMu.Unlock()
-
-	res := m.used.Clean()
+	m.cleanMu.Lock()
+	defer m.cleanMu.Unlock()
 
 	var errs []error
-	for _, pair := range res {
-		if err = m.nft.Delete(utils.Uint32ToIP(pair.Value), utils.Uint32ToIP(pair.Key)); err != nil {
-			errs = append(errs, err)
-			m.used.Set(pair.Key, pair.Value)
-			continue
-		}
-		m.free.EnqueueTail(pair.Value)
-	}
+	retryFailed := m.teardown(m.pending, &errs)
+	expiredFailed := m.teardown(m.table.expired(m.ttl), &errs)
+	m.pending = append(retryFailed, expiredFailed...)
+
 	if len(errs) > 0 {
 		err = errors.Join(errs...)
+	}
+	return
+}
+
+func (m *IPMapper) teardown(items []pair, errs *[]error) (failed []pair) {
+	for _, p := range items {
+		if delErr := m.fw.Delete(firewall.Mapping{Fake: utils.Uint32ToIP(p.fake), Real: utils.Uint32ToIP(p.real)}); delErr != nil {
+			*errs = append(*errs, delErr)
+			failed = append(failed, p)
+			continue
+		}
+		m.pool.release(p.fake)
 	}
 	return
 }
