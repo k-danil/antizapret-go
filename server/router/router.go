@@ -28,6 +28,19 @@ const (
 	ActionPass
 )
 
+func (a Action) String() string {
+	switch a {
+	case ActionRemap:
+		return "remap"
+	case ActionBlackhole:
+		return "blackhole"
+	case ActionPass:
+		return "passthrough"
+	default:
+		return "unknown"
+	}
+}
+
 func NewRouter(matchers []cfg.Matcher, store *Store) (r *Router, err error) {
 	sources := make([]Source, 0, len(matchers))
 	for _, m := range matchers {
@@ -192,4 +205,8 @@ func (r *Router) Lookup(domain string) (action Action) {
 		action = ActionPass
 	}
 	return
+}
+
+func (r *Router) Ready() bool {
+	return r.r.Load() != nil
 }

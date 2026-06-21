@@ -2,12 +2,12 @@ package server
 
 import (
 	"context"
-	"net"
 	"net/netip"
 	"time"
 
 	"codeberg.org/miekg/dns"
 	"github.com/k-danil/antizapret-go/log"
+	"github.com/k-danil/antizapret-go/metrics"
 	rtr "github.com/k-danil/antizapret-go/server/router"
 	"github.com/k-danil/antizapret-go/utils"
 )
@@ -23,33 +23,42 @@ func blackholeTransform(a *dns.A) (*dns.A, error) {
 }
 
 func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
+	served, rcode, action := metrics.ServedCache, metrics.RcodeServFail, metrics.ActionNone
+	if s.metrics.Enabled() {
+		defer func(now time.Time) {
+			s.metrics.ObserveRequest(rcode, action, served, time.Since(now))
+		}(time.Now())
+	}
+
 	if len(r.Question) != 1 {
+		rcode, served = metrics.RcodeFormErr, metrics.ServedError
 		r.Response = true
 		r.Rcode = dns.RcodeFormatError
-		r.Data = nil
-		_, _ = r.WriteTo(w)
+		reuseAndWrite(w, r)
 		return
 	}
 
 	q := r.Question[0]
+	qtype := dns.RRToType(q)
 	domain := utils.NormalizeDomain(q.Header().Name)
-	action := s.router.Lookup(domain)
+	act := s.router.Lookup(domain)
+	action = act.String()
 
 	// Для remap/blackhole-доменов глушим HTTPS/SVCB: их подсказки (ipv4hint, ECH)
 	// позволили бы клиенту пойти мимо подмены A-записи. Пустой NODATA заставляет
 	// клиента упасть на A-запрос, который будет подменён.
-	if action == rtr.ActionRemap || action == rtr.ActionBlackhole {
-		if qtype := dns.RRToType(q); qtype == dns.TypeHTTPS || qtype == dns.TypeSVCB {
+	if act == rtr.ActionRemap || act == rtr.ActionBlackhole {
+		if qtype == dns.TypeHTTPS || qtype == dns.TypeSVCB {
+			rcode, served = metrics.RcodeNoError, metrics.ServedSuppressed
 			r.Response = true
 			r.Rcode = dns.RcodeSuccess
 			r.Answer, r.Ns, r.Extra = nil, nil, nil
-			r.Data = nil // Data ещё держит байты запроса; обнуляем, чтобы WriteTo перепаковал из полей
-			_, _ = r.WriteTo(w)
+			reuseAndWrite(w, r)
 			return
 		}
 	}
 
-	resp := s.cache.GetResponseLambda(r, domain, func() (resp *dns.Msg, ttl time.Duration, err error) {
+	resp, hit := s.cache.GetResponseLambda(r, domain, func() (resp *dns.Msg, ttl time.Duration, err error) {
 		// резолв под Background: single-flight шарит его на всех ждущих — отмена одного не должна рвать остальных
 		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 		defer cancel()
@@ -63,16 +72,19 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 		}
 		return
 	})
+	if !hit {
+		served = metrics.ServedUpstream
+	}
 
 	if resp == nil {
 		r.Response = true
 		r.Rcode = dns.RcodeServerFailure
-		r.Data = nil
-		_, _ = r.WriteTo(w)
+		reuseAndWrite(w, r)
 		return
 	}
 
 	if resp.Rcode != dns.RcodeSuccess {
+		rcode = rcodeLabel(resp.Rcode)
 		resp.Response = true
 		resp.Data = nil
 		_, _ = resp.WriteTo(w)
@@ -80,14 +92,14 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 	}
 
 	var mapper Transformer
-	switch action {
+	switch act {
 	case rtr.ActionPass:
 	case rtr.ActionBlackhole:
 		mapper = blackholeTransform
 	case rtr.ActionRemap:
 		ttl := uint32(s.ipMapper.GetTTL().Seconds() * 0.8)
 		mapper = func(a *dns.A) (*dns.A, error) {
-			fakeIP, mapErr := s.ipMapper.Map(net.IP(a.Addr.AsSlice()))
+			fakeIP, mapErr := s.ipMapper.Map(a.Addr.AsSlice())
 			if mapErr != nil {
 				return nil, mapErr
 			}
@@ -114,7 +126,16 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 		}
 	}
 
+	rcode = rcodeLabel(resp.Rcode)
 	_, _ = resp.WriteTo(w)
+}
+
+// m.Data[:0] (не nil!) переиспользует буфер запроса из srv.MsgPool: с nil Pack аллоцирует
+// мелкий буфер, WriteTo вернёт его в пул, и следующий recvmmsg-приём упадёт на r.Data[:N]
+// (Put форка не отбрасывает cap < size).
+func reuseAndWrite(w dns.ResponseWriter, m *dns.Msg) {
+	m.Data = m.Data[:0]
+	_, _ = m.WriteTo(w)
 }
 
 func (s *Server) rewriteRRS(in []dns.RR, transform Transformer) (out []dns.RR, attempted, failed int) {
@@ -142,4 +163,23 @@ func (s *Server) rewriteRRS(in []dns.RR, transform Transformer) (out []dns.RR, a
 		}
 	}
 	return
+}
+
+func rcodeLabel(rcode uint16) string {
+	switch rcode {
+	case dns.RcodeSuccess:
+		return metrics.RcodeNoError
+	case dns.RcodeFormatError:
+		return metrics.RcodeFormErr
+	case dns.RcodeServerFailure:
+		return metrics.RcodeServFail
+	case dns.RcodeNameError:
+		return metrics.RcodeNXDomain
+	case dns.RcodeNotImplemented:
+		return metrics.RcodeNotImp
+	case dns.RcodeRefused:
+		return metrics.RcodeRefused
+	default:
+		return metrics.RcodeOther
+	}
 }

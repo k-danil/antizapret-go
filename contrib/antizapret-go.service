@@ -1,13 +1,13 @@
 # systemd-юнит для antizapret-go.
 #
 # Предполагает:
-#   бинарь  — /usr/local/bin/antizapret-go
+#   бинарь  — /usr/bin/antizapret-go
 #   конфиг  — /etc/antizapret-go/config.yaml
 #   стейт   — /var/lib/antizapret-go/  (создаётся через StateDirectory;
 #             совпадает с дефолтным state_path в конфиге)
 #
 # Установка:
-#   install -Dm755 build/antizapret_go /usr/local/bin/antizapret-go
+#   install -Dm755 build/antizapret_go /usr/bin/antizapret-go
 #   install -Dm644 contrib/antizapret-go.service /etc/systemd/system/antizapret-go.service
 #   mkdir -p /etc/antizapret-go && ./antizapret-go -default-config > /etc/antizapret-go/config.yaml
 #   systemctl daemon-reload && systemctl enable --now antizapret-go
@@ -17,12 +17,14 @@
 [Unit]
 Description=antizapret-go — selective DNS proxy
 Documentation=https://github.com/k-danil/antizapret-go
-After=network-online.target nss-lookup.target
+# nftables.service поднимается раньше: он создаёт таблицу `ip nat`, в которую
+# antizapret-go на старте добавляет свою DNAT-цепочку (без таблицы бэкенд падает).
+After=network-online.target nss-lookup.target nftables.service
 Wants=network-online.target
 
 [Service]
 Type=exec
-ExecStart=/usr/local/bin/antizapret-go -config /etc/antizapret-go/config.yaml
+ExecStart=/usr/bin/antizapret-go -config /etc/antizapret-go/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s

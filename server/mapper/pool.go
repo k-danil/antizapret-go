@@ -36,6 +36,10 @@ func (p *ipPool) inRange(ip uint32) bool {
 	return ip >= p.network && ip < p.broadcast
 }
 
+func (p *ipPool) capacity() uint32 {
+	return p.broadcast - p.network
+}
+
 func (p *ipPool) isAdopted(ip uint32) (ok bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

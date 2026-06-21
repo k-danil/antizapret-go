@@ -144,3 +144,7 @@ func (m *IPMapper) teardown(items []pair, errs *[]error) (failed []pair) {
 func (m *IPMapper) GetTTL() time.Duration {
 	return m.ttl
 }
+
+func (m *IPMapper) Stats() (active, capacity int) {
+	return m.table.Len(), int(m.pool.capacity())
+}

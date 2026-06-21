@@ -86,18 +86,18 @@ func cloneWithTTL(in []dns.RR, ttl uint32) []dns.RR {
 	return out
 }
 
-func (c *Cache) GetResponseLambda(req *dns.Msg, name string, lambda func() (*dns.Msg, time.Duration, error)) (resp *dns.Msg) {
+func (c *Cache) GetResponseLambda(req *dns.Msg, name string, lambda func() (*dns.Msg, time.Duration, error)) (resp *dns.Msg, hit bool) {
 	// Неключуемое имя коалесцировать нельзя: пустой ключ слил бы все такие запросы в один ответ.
 	if name == "" || len(req.Question) != 1 {
 		resp, _, _ = lambda()
-		return resp
+		return resp, false
 	}
 
 	q := req.Question[0]
 	key := cacheKey(name, dns.RRToType(q), q.Header().Class)
 
 	if resp = c.getByKey(req, key); resp != nil {
-		return resp
+		return resp, true
 	}
 
 	shared, _, _ := c.sf.Do(key, func() (any, error) {
@@ -112,13 +112,13 @@ func (c *Cache) GetResponseLambda(req *dns.Msg, name string, lambda func() (*dns
 
 	r, _ := shared.(*dns.Msg)
 	if r == nil {
-		return nil
+		return nil, false
 	}
 
 	resp = r.Copy()
 	resp.Data = nil
 	resp.ID = req.ID
-	return resp
+	return resp, false
 }
 
 func (c *Cache) SetResponse(req, resp *dns.Msg, name string, ttl time.Duration) {
@@ -182,6 +182,10 @@ func cacheKey(name string, qtype, qclass uint16) string {
 	b.WriteByte(keySep)
 	b.WriteString(strconv.FormatUint(uint64(qclass), 10))
 	return b.String()
+}
+
+func (c *Cache) Len() int {
+	return c.cache.Len()
 }
 
 func (c *Cache) Close() error {

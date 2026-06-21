@@ -50,6 +50,13 @@ func (t *mappingTable) has(real uint32) (ok bool) {
 	return
 }
 
+func (t *mappingTable) Len() (n int) {
+	t.mu.RLock()
+	n = len(t.m)
+	t.mu.RUnlock()
+	return
+}
+
 func (t *mappingTable) expired(ttl time.Duration) (out []pair) {
 	cutoff := time.Now().Add(-ttl).UnixNano()
 
