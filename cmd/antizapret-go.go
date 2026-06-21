@@ -14,10 +14,12 @@ import (
 	"codeberg.org/miekg/dns"
 	"github.com/k-danil/antizapret-go/cfg"
 	"github.com/k-danil/antizapret-go/log"
+	"github.com/k-danil/antizapret-go/metrics"
 	"github.com/k-danil/antizapret-go/server"
 	"github.com/k-danil/antizapret-go/server/firewall"
 	"github.com/k-danil/antizapret-go/server/firewall/iptables"
 	"github.com/k-danil/antizapret-go/server/firewall/nft"
+	"github.com/k-danil/antizapret-go/server/firewall/noop"
 )
 
 const (
@@ -31,23 +33,21 @@ func newFirewall(c cfg.Firewall, fakeCIDR string) (firewall.Manager, error) {
 		return iptables.New(c.Chain, fakeCIDR)
 	case cfg.BackendNFT, "":
 		return nft.NewNftManager(c.Chain, c.Set)
+	case cfg.BackendNoop:
+		return noop.New(), nil
 	default:
 		return nil, fmt.Errorf("unknown firewall backend `%s`", c.Backend)
 	}
 }
 
 func main() {
-	log.L.Infow("starting",
-		"service", cfg.ServiceName,
-		"version", cfg.ShowVersion())
-
 	configFilename := flag.String("config", "", "Path to config file")
 	help := flag.Bool("help", false, "Shows usage")
 	defaultConfig := flag.Bool("default-config", false, "Print default config and exit")
 	flag.Parse()
 
 	if *defaultConfig {
-		_, _ = fmt.Fprintf(flag.CommandLine.Output(), "%s\n", cfg.AntizapretDefaultConfig)
+		_, _ = fmt.Fprintln(os.Stdout, cfg.AntizapretDefaultConfig)
 		os.Exit(0)
 	}
 
@@ -56,6 +56,10 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+
+	log.L.Infow("starting",
+		"service", cfg.ServiceName,
+		"version", cfg.ShowVersion())
 
 	if err := cfg.ReadConfig(*configFilename); err != nil {
 		log.L.Fatalw("Error reading config",
@@ -80,14 +84,19 @@ func main() {
 			"err", err)
 	}
 
-	srv, err := server.NewServer(cfg.Antizapret, fw)
+	var m *metrics.Metrics
+	if cfg.Antizapret.Metrics.Address != "" {
+		m = metrics.New()
+	}
+
+	srv, err := server.NewServer(cfg.Antizapret, fw, m)
 	if err != nil {
 		log.L.Fatalw("Error creating server",
 			"err", err)
 	}
 	defer func() { _ = srv.Close() }()
 
-	go srv.NFTCleaner(ctx, cfg.Antizapret.Firewall.TTL)
+	go srv.MappingCleaner(ctx, cfg.Antizapret.Firewall.TTL)
 
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -95,6 +104,16 @@ func main() {
 		defer signal.Stop(sig)
 		srv.PolicyRebuilder(ctx, cfg.Antizapret.Policy.ReloadInterval, sig)
 	}()
+
+	if m.Enabled() {
+		addr := cfg.Antizapret.Metrics.Address
+		go func() {
+			if err := m.Serve(ctx, addr, cfg.ShowVersion(), srv.Ready); err != nil {
+				log.L.Errorw("metrics server failed; continuing without metrics", "addr", addr, "err", err)
+			}
+		}()
+		log.L.Infow("metrics server started", "addr", addr)
+	}
 
 	srv.WaitReady(ctx)
 

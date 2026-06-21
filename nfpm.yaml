@@ -1,0 +1,49 @@
+# nfpm-спецификация .deb (см. `make deb`). Собирается даже с macOS:
+#   go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+#   make deb            # → build/antizapret-go_<version>_<arch>.deb
+#
+# Пакет ставит только переиспользуемое: бинарь, systemd-юнит, каталоги. Конфиг,
+# списки, firewall (nft) и sysctl специфичны для инсталляции и пакетом НЕ ставятся —
+# их кладёт оператор (postinstall генерит дефолтный config.yaml, если своего ещё нет).
+name: antizapret-go
+arch: ${DEB_ARCH}
+platform: linux
+version: ${DEB_VERSION}
+section: net
+priority: optional
+maintainer: "D. K. <n00btype@gmail.com>"
+homepage: "https://github.com/k-danil/antizapret-go"
+license: 0BSD
+description: |
+  Selective per-domain routing DNS proxy.
+  Resolves names, classifies domains against lists, and for remap-listed domains
+  hands the client a fake IP from a private pool while programming fake->real DNAT
+  in nftables (or iptables). Linux-only.
+recommends:
+  - nftables
+
+deb:
+  compression: gzip
+
+contents:
+  - src: ./build/antizapret_go
+    dst: /usr/bin/antizapret-go
+    file_info:
+      mode: 0755
+  - src: ./contrib/antizapret-go.service
+    dst: /lib/systemd/system/antizapret-go.service
+    file_info:
+      mode: 0644
+  - dst: /etc/antizapret-go
+    type: dir
+    file_info:
+      mode: 0755
+  - dst: /var/lib/antizapret-go
+    type: dir
+    file_info:
+      mode: 0700
+
+scripts:
+  postinstall: ./contrib/deb/postinstall.sh
+  preremove: ./contrib/deb/preremove.sh
+  postremove: ./contrib/deb/postremove.sh

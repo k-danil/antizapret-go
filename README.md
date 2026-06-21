@@ -58,7 +58,9 @@ DNS-запрос клиента
 
 ## Требования
 
-- **Linux** — сервис программирует nftables/iptables; на других ОС не собирается/не работает.
+- **Linux — для работы.** Реальные DNAT-бэкенды (nftables/iptables) есть только под
+  Linux. Сам проект собирается и тестируется на любой ОС (вне Linux firewall-бэкенд —
+  `noop`, см. ниже) — удобно для разработки.
 - Права на управление файрволом (обычно — запуск от root; для `iptables` см. ниже про contrib-юнит).
 - Внешняя настройка (вне этого сервиса): маршрутизация `fake_cidr` в туннель,
   `net.ipv4.ip_forward=1`, при необходимости SNAT/masquerade на исходящем
@@ -66,17 +68,20 @@ DNS-запрос клиента
 
 ## Сборка
 
-`make` собирает бинарь в `build/antizapret_go` (`GOOS=linux`, `CGO_ENABLED=0`,
-арка хоста; версия проставляется через ldflags):
+`make` собирает бинарь в `build/antizapret_go` под **текущую платформу**
+(`CGO_ENABLED=0`; версия — через ldflags). Кросс-сборка — через `GOOS`/`GOARCH`:
 
 ```sh
-make
+make                            # под хост
+make GOOS=linux GOARCH=amd64    # под сервер
 ```
 
-Под другую архитектуру — напрямую через `go build`:
+Деплойный `.deb` — `make deb` (всегда Linux; арка — `DEB_ARCH`, по умолчанию `amd64`;
+нужен [`nfpm`](https://nfpm.goreleaser.com)):
 
 ```sh
-GOOS=linux GOARCH=amd64 go build -o antizapret_go ./cmd/
+make deb                  # → build/antizapret-go_<version>_amd64.deb
+make deb DEB_ARCH=arm64
 ```
 
 ## Запуск
@@ -157,7 +162,7 @@ community-лист добавил `www.example.com remap`, а ваш prune-`pass
 | `fake_cidr`        | пул fake-IP для `remap` (напр. `10.30.0.0/15`); должен заворачиваться в туннель                    |
 | `cache.capacity`   | максимум записей в DNS-кэше                                                                        |
 | `cache.ttl`        | дефолтный TTL кэша, если у ответа нет своего                                                       |
-| `firewall.backend` | `nft` (по умолчанию) или `iptables` — чем программировать DNAT (см. ниже)                          |
+| `firewall.backend` | `nft` (по умолчанию), `iptables` или `noop` — чем программировать DNAT (см. ниже)                  |
 | `firewall.set`     | имя nftables-set (только для `nft`)                                                                |
 | `firewall.chain`   | имя цепочки DNAT (NAT/prerouting) — для обоих бэкендов                                             |
 | `firewall.ttl`     | время жизни маппинга fake→real (после чего IP переиспользуется)                                    |
@@ -165,6 +170,7 @@ community-лист добавил `www.example.com remap`, а ваш prune-`pass
 | `processes`        | DNS-слушателей на каждый binding (SO_REUSEPORT, параллельный приём); по умолчанию — число ядер CPU |
 | `logging_severity` | `debug` / `info` / `warn` / `error`                                                                |
 | `state_path`       | путь к bbolt-файлу (persistent кэш списков + быстрый старт)                                        |
+| `metrics.address`  | адрес admin-HTTP (`/metrics`, `/healthz`, `/readyz`); пусто = выключено; реком. localhost          |
 
 ### Бэкенды DNAT (`firewall.backend`)
 
@@ -176,8 +182,11 @@ community-лист добавил `www.example.com remap`, а ваш prune-`pass
   таблицу `nat` и прав на iptables. При запуске через contrib-юнит systemd
   раскомментируйте в нём iptables-блок (`CAP_NET_RAW` + запись в `/run` для
   `xtables.lock`) — иначе операции с правилами падают из-за sandbox.
+- **`noop`** — ничего не программирует: DNAT не создаётся. Для разработки/тестов и
+  запуска вне Linux (реальные бэкенды — только под Linux); выбирается на любой ОС.
+  С ним `remap` отдаёт клиенту fake-IP, но DNAT `fake → real` не пишется.
 
-Оба бэкенда **переживают рестарт процесса**: состояние DNAT читается из ядра и
+`nft`/`iptables` **переживают рестарт процесса**: состояние DNAT читается из ядра и
 усыновляется на старте — активные маппинги `fake→real` не теряются.
 
 ## Производительность
@@ -221,6 +230,32 @@ community-лист добавил `www.example.com remap`, а ваш prune-`pass
 
 **CPU** — суб-микросекундная работа на запрос; потолок задаёт сеть/файрвол, не CPU.
 
+## Наблюдаемость
+
+Опционально (по умолчанию выключено): задайте `metrics.address` — поднимется
+admin-HTTP с эндпоинтами:
+
+- `/metrics` — метрики в формате Prometheus (плюс стандартные `go_*` / `process_*`);
+- `/healthz` — liveness (200, пока процесс жив);
+- `/readyz` — readiness (200, когда загружен radix списков; на холодном старте до
+  первого ребилда — 503);
+- `/version` — версия сборки.
+
+Эндпоинты без аутентификации — держите адрес на localhost или закрывайте файрволом.
+
+Что полезно мониторить (префикс метрик — `antizapret_`):
+
+- `mapper_active_mappings` / `mapper_pool_capacity` — утилизация пула fake-IP; алерт на
+  приближение к ёмкости упреждает `SERVFAIL` из-за исчерпания пула (см. ниже).
+- `upstream_queries_total{upstream,result}` + `upstream_query_duration_seconds` —
+  здоровье и латентность апстримов, эффективность round-robin-фолбэка.
+- `router_rebuilds_total{result}` + `router_rebuild_duration_seconds` — свежесть и
+  состояние источников списков.
+- `dns_responses_total{rcode,action}` + `dns_request_duration_seconds{served}` —
+  распределение ответов (SERVFAIL-rate), латентность и hit-ratio кэша (через лейбл
+  `served`: cache vs upstream).
+- `dns_cache_size` — наполнение кэша, тюнинг `cache.capacity`.
+
 ## Известные ограничения
 
 - **Только IPv4.** `remap`/`blackhole` работают по IPv4: для таких доменов `AAAA`
@@ -229,7 +264,5 @@ community-лист добавил `www.example.com remap`, а ваш prune-`pass
 - **Исчерпание пула.** Если свободные адреса `fake_cidr` закончились, новые
   remap-домены получают `SERVFAIL`, пока адреса не высвободятся по `firewall.ttl`.
   Запас регулируется размером `fake_cidr`.
-- **Наблюдаемость.** Нет метрик и health/ready-эндпоинта — мониторинг только по
-  логам.
 - **DNS-кэш эфемерен.** Маппинги `fake→real` переживают рестарт (усыновляются из
   ядра), но кэш DNS-ответов — нет: после рестарта он наполняется заново.

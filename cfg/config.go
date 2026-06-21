@@ -26,8 +26,8 @@ type Upstream struct {
 }
 
 type Firewall struct {
-	Backend BackendType   `yaml:"backend" validate:"omitempty,oneof=nft iptables"`
-	Set     string        `yaml:"set" validate:"required_unless=Backend iptables"`
+	Backend BackendType   `yaml:"backend" validate:"omitempty,oneof=nft iptables noop"`
+	Set     string        `yaml:"set" validate:"required_if=Backend nft"`
 	Chain   string        `yaml:"chain" validate:"required"`
 	TTL     time.Duration `yaml:"ttl" validate:"gt=0"`
 }
@@ -37,6 +37,7 @@ type BackendType string
 const (
 	BackendNFT      BackendType = "nft"
 	BackendIPTables BackendType = "iptables"
+	BackendNoop     BackendType = "noop"
 )
 
 type RouterType string
@@ -78,9 +79,14 @@ type Regexp struct {
 	To   string `yaml:"to"`
 }
 
+type Metrics struct {
+	Address string `yaml:"address" validate:"omitempty,hostname_port"`
+}
+
 type AntizapretConfig struct {
 	Bindings        []Bind        `yaml:"bindings" validate:"min=1,dive"`
 	Processes       int           `yaml:"processes" validate:"omitempty,min=1"`
+	Metrics         Metrics       `yaml:"metrics"`
 	Upstreams       []Upstream    `yaml:"upstreams" validate:"min=1,dive"`
 	Policy          Policy        `yaml:"policy"`
 	FakeCIDR        string        `yaml:"fake_cidr" validate:"required,cidrv4"`

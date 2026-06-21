@@ -79,7 +79,7 @@ func TestDNSHandlerServfailOnResolveFailure(t *testing.T) {
 
 	res, err := resolver.NewResolver([]cfg.Upstream{
 		{Name: "dead", DSN: "udp://127.0.0.1:1", Timeout: 100 * time.Millisecond},
-	})
+	}, nil)
 	require.NoError(t, err)
 
 	c := cache.NewCache(10, time.Hour, time.Second, time.Hour)

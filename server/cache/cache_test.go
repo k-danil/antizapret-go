@@ -163,7 +163,7 @@ func TestGetResponseLambdaSingleflight(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Go(func() {
-			results[i] = c.GetResponseLambda(req, testName, lambda)
+			results[i], _ = c.GetResponseLambda(req, testName, lambda)
 		})
 	}
 	wg.Wait()
@@ -205,14 +205,14 @@ func TestGetResponseLambdaNilOnFailure(t *testing.T) {
 	defer func() { _ = c.Close() }()
 
 	req := aQuery("a.test.")
-	resp := c.GetResponseLambda(req, testName, func() (*dns.Msg, time.Duration, error) {
+	resp, _ := c.GetResponseLambda(req, testName, func() (*dns.Msg, time.Duration, error) {
 		return nil, 0, errors.New("resolve failed")
 	})
 	require.Nil(t, resp, "на сбое lambda кэш отдаёт nil — хэндлер синтезирует свой SERVFAIL")
 
 	// сбой не должен кэшироваться: следующий вызов реально резолвит
 	called := false
-	resp = c.GetResponseLambda(req, testName, func() (*dns.Msg, time.Duration, error) {
+	resp, _ = c.GetResponseLambda(req, testName, func() (*dns.Msg, time.Duration, error) {
 		called = true
 		return aResp("a.test.", dns.RcodeSuccess, 60, true), DefaultTTL, nil
 	})

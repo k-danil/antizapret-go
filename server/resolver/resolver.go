@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"codeberg.org/miekg/dns"
 	"github.com/k-danil/antizapret-go/cfg"
+	"github.com/k-danil/antizapret-go/metrics"
 )
 
 type Resolver struct {
@@ -16,7 +18,29 @@ type Resolver struct {
 	next      atomic.Uint64
 }
 
-func NewResolver(config []cfg.Upstream) (r *Resolver, err error) {
+func upstreamLabel(u cfg.Upstream) string {
+	if u.Name != "" {
+		return u.Name
+	}
+	return u.DSN
+}
+
+type instrumentedUpstream struct {
+	Upstream
+	m    *metrics.Metrics
+	name string
+}
+
+func (i instrumentedUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
+	defer func(now time.Time) {
+		i.m.ObserveUpstream(i.name, err, time.Since(now))
+	}(time.Now())
+
+	resp, err = i.Upstream.Resolve(ctx, req)
+	return
+}
+
+func NewResolver(config []cfg.Upstream, m *metrics.Metrics) (r *Resolver, err error) {
 	r = &Resolver{
 		upstreams: make([]Upstream, 0, len(config)),
 	}
@@ -37,6 +61,9 @@ func NewResolver(config []cfg.Upstream) (r *Resolver, err error) {
 			return
 		}
 
+		if m.Enabled() {
+			upstream = instrumentedUpstream{Upstream: upstream, m: m, name: upstreamLabel(u)}
+		}
 		r.upstreams = append(r.upstreams, upstream)
 	}
 
