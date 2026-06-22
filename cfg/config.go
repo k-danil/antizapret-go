@@ -54,10 +54,18 @@ const (
 )
 
 type Policy struct {
-	ReloadInterval time.Duration `yaml:"reload_interval" validate:"gt=0"`
-	RebuildTimeout time.Duration `yaml:"rebuild_timeout" validate:"gt=0"`
-	Matchers       []Matcher     `yaml:"matchers" validate:"dive"`
+	ReloadInterval time.Duration  `yaml:"reload_interval" validate:"gt=0"`
+	RebuildTimeout time.Duration  `yaml:"rebuild_timeout" validate:"gt=0"`
+	MatcherBackend MatcherBackend `yaml:"matcher_backend" validate:"omitempty,oneof=radix fst"`
+	Matchers       []Matcher      `yaml:"matchers" validate:"dive"`
 }
+
+type MatcherBackend string
+
+const (
+	MatcherRadix MatcherBackend = "radix"
+	MatcherFST   MatcherBackend = "fst"
+)
 
 type Matcher struct {
 	Name       string     `yaml:"name" validate:"required"`
@@ -110,6 +118,7 @@ upstreams:
 policy:
   reload_interval: 6h
   rebuild_timeout: 1m
+  matcher_backend: fst
   matchers:
     - name: "hosts"
       type: "remap"

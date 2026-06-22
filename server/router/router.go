@@ -10,49 +10,32 @@ import (
 
 	"github.com/k-danil/antizapret-go/cfg"
 	"github.com/k-danil/antizapret-go/log"
+	"github.com/k-danil/antizapret-go/server/router/matcher"
 	"github.com/k-danil/antizapret-go/utils"
 )
 
 type Router struct {
 	sources []Source
 	store   *Store
+	backend cfg.MatcherBackend
 
-	r atomic.Pointer[utils.Radix[Action]]
+	m atomic.Pointer[matcherBox]
 }
 
-type Action uint8
+type matcherBox struct{ matcher.Matcher }
 
-const (
-	ActionBlackhole Action = iota
-	ActionRemap
-	ActionPass
-)
-
-func (a Action) String() string {
-	switch a {
-	case ActionRemap:
-		return "remap"
-	case ActionBlackhole:
-		return "blackhole"
-	case ActionPass:
-		return "passthrough"
-	default:
-		return "unknown"
-	}
-}
-
-func NewRouter(matchers []cfg.Matcher, store *Store) (r *Router, err error) {
+func NewRouter(matchers []cfg.Matcher, store *Store, backend cfg.MatcherBackend) (r *Router, err error) {
 	sources := make([]Source, 0, len(matchers))
 	for _, m := range matchers {
 		s := Source{Name: m.Name, URI: m.Source, Prune: m.Prune}
 
 		switch m.Type {
 		case cfg.RouterTypeBlackhole:
-			s.Action = ActionBlackhole
+			s.Action = matcher.ActionBlackhole
 		case cfg.RouterTypeRemap:
-			s.Action = ActionRemap
+			s.Action = matcher.ActionRemap
 		case cfg.RouterTypePassthrough:
-			s.Action = ActionPass
+			s.Action = matcher.ActionPass
 		default:
 			err = fmt.Errorf("unknown router type `%s` for source `%s`", m.Type, m.Name)
 			return
@@ -74,7 +57,7 @@ func NewRouter(matchers []cfg.Matcher, store *Store) (r *Router, err error) {
 		sources = append(sources, s)
 	}
 
-	r = &Router{sources: sources, store: store}
+	r = &Router{sources: sources, store: store, backend: backend}
 	return
 }
 
@@ -89,7 +72,7 @@ func (r *Router) Rebuild(ctx context.Context) (err error) {
 	}
 	wg.Wait()
 
-	radix := utils.NewRadix[Action]()
+	radix := matcher.NewRadix[matcher.Action]()
 	var (
 		length int
 		errs   []error
@@ -102,13 +85,32 @@ func (r *Router) Rebuild(ctx context.Context) (err error) {
 		length += len(results[i].entries)
 	}
 
-	r.r.Store(radix)
-	log.L.Infow("router rebuilt", "length", length)
+	box, cerr := r.compile(radix)
+	if cerr != nil {
+		errs = append(errs, fmt.Errorf("compile matcher: %w", cerr))
+	} else {
+		r.m.Store(box)
+		log.L.Infow("router rebuilt", "length", length, "backend", string(r.backend))
+	}
 
 	if len(errs) > 0 {
 		err = errors.Join(errs...)
 	}
 	return
+}
+
+func (r *Router) compile(rx *matcher.Radix[matcher.Action]) (*matcherBox, error) {
+	// пустой бэкенд → FST (дефолт)
+	switch r.backend {
+	case cfg.MatcherRadix:
+		return &matcherBox{matcher.NewRadixMatcher(rx)}, nil
+	default:
+		m, err := matcher.NewFSTMatcher(rx)
+		if err != nil {
+			return nil, err
+		}
+		return &matcherBox{m}, nil
+	}
 }
 
 type sourceResult struct {
@@ -142,7 +144,7 @@ func (r *Router) loadSource(ctx context.Context, s Source) sourceResult {
 
 // LoadCached строит radix только из кэша; 0 => холодный старт (кэша нет).
 func (r *Router) LoadCached() (n int) {
-	radix := utils.NewRadix[Action]()
+	radix := matcher.NewRadix[matcher.Action]()
 	for _, s := range r.sources {
 		entries, err := r.store.Load(s.Name)
 		if err != nil {
@@ -152,7 +154,12 @@ func (r *Router) LoadCached() (n int) {
 		n += len(entries)
 	}
 	if n > 0 {
-		r.r.Store(radix)
+		box, err := r.compile(radix)
+		if err != nil {
+			log.L.Warnw("failed to compile cached matcher", "err", err)
+			return 0
+		}
+		r.m.Store(box)
 	}
 	return
 }
@@ -182,11 +189,11 @@ func (r *Router) fetchSource(ctx context.Context, s Source) (entries []Entry, er
 	return
 }
 
-func insertEntries(radix *utils.Radix[Action], action Action, prune bool, entries []Entry) {
+func insertEntries(radix *matcher.Radix[matcher.Action], action matcher.Action, prune bool, entries []Entry) {
 	for _, e := range entries {
-		mode := utils.MatchExact
+		mode := matcher.MatchExact
 		if e.Subdomains {
-			mode = utils.MatchPrefix
+			mode = matcher.MatchPrefix
 		}
 		radix.Insert(e.Domain, action, mode)
 		if prune {
@@ -195,18 +202,14 @@ func insertEntries(radix *utils.Radix[Action], action Action, prune bool, entrie
 	}
 }
 
-func (r *Router) Lookup(domain string) (action Action) {
-	radix := r.r.Load()
-	if radix == nil {
-		return ActionPass
+func (r *Router) Lookup(domain string) matcher.Action {
+	box := r.m.Load()
+	if box == nil {
+		return matcher.ActionPass
 	}
-	var ok bool
-	if action, ok = radix.Get(domain); !ok {
-		action = ActionPass
-	}
-	return
+	return box.Lookup(domain)
 }
 
 func (r *Router) Ready() bool {
-	return r.r.Load() != nil
+	return r.m.Load() != nil
 }

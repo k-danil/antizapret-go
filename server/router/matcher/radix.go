@@ -1,4 +1,4 @@
-package utils
+package matcher
 
 import (
 	"bytes"
@@ -54,7 +54,7 @@ func (r *Radix[T]) Insert(key string, val T, mode MatchMode) {
 		return
 	}
 
-	r.root.insert(reverseLabels(key), val, mode)
+	r.root.insert(ReverseLabels(key), val, mode)
 }
 
 func (n *radixNode[T]) insert(s []byte, val T, mode MatchMode) {
@@ -196,7 +196,7 @@ func (r *Radix[T]) PruneBelow(key string) {
 	if key == "" {
 		return
 	}
-	r.root.pruneBelow(reverseLabels(key))
+	r.root.pruneBelow(ReverseLabels(key))
 }
 
 func (n *radixNode[T]) pruneBelow(s []byte) {
@@ -240,10 +240,30 @@ func reverseLabelsInto(b *bytes.Buffer, key string) {
 	}
 }
 
-// reverseLabels возвращает владеемую копию — Insert/PruneBelow сохраняют её как prefix узлов.
-func reverseLabels(key string) []byte {
+// ReverseLabels отдаёт владеемую копию — Insert/PruneBelow сохраняют её как prefix узлов.
+func ReverseLabels(key string) []byte {
 	var b bytes.Buffer
 	b.Grow(len(key))
 	reverseLabelsInto(&b, key)
 	return b.Bytes()
+}
+
+// Walk перебирает узлы с match в лексикографическом порядке ключей. reversed —
+// переиспользуемый буфер: копируй, если сохраняешь его за пределами вызова.
+func (r *Radix[T]) Walk(fn func(reversed []byte, mode MatchMode, val T)) {
+	var buf []byte
+	var walk func(n *radixNode[T])
+	walk = func(n *radixNode[T]) {
+		buf = append(buf, n.prefix...)
+		if n.match != MatchNone {
+			fn(buf, n.match, n.value)
+		}
+		for i := range n.children {
+			walk(n.children[i].node)
+		}
+		buf = buf[:len(buf)-len(n.prefix)]
+	}
+	if r.root != nil {
+		walk(r.root)
+	}
 }
