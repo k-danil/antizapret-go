@@ -52,7 +52,7 @@ func NewServer(cfg cfg.AntizapretConfig, fw firewall.Manager, m *metrics.Metrics
 		return
 	}
 
-	if s.router, err = rtr.NewRouter(cfg.Policy.Matchers, s.routerStore); err != nil {
+	if s.router, err = rtr.NewRouter(cfg.Policy.Matchers, s.routerStore, cfg.Policy.MatcherBackend); err != nil {
 		return
 	}
 

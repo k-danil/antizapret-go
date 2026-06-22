@@ -8,7 +8,7 @@ import (
 	"codeberg.org/miekg/dns"
 	"github.com/k-danil/antizapret-go/log"
 	"github.com/k-danil/antizapret-go/metrics"
-	rtr "github.com/k-danil/antizapret-go/server/router"
+	"github.com/k-danil/antizapret-go/server/router/matcher"
 	"github.com/k-danil/antizapret-go/utils"
 )
 
@@ -47,7 +47,7 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 	// Для remap/blackhole-доменов глушим HTTPS/SVCB: их подсказки (ipv4hint, ECH)
 	// позволили бы клиенту пойти мимо подмены A-записи. Пустой NODATA заставляет
 	// клиента упасть на A-запрос, который будет подменён.
-	if act == rtr.ActionRemap || act == rtr.ActionBlackhole {
+	if act == matcher.ActionRemap || act == matcher.ActionBlackhole {
 		if qtype == dns.TypeHTTPS || qtype == dns.TypeSVCB {
 			rcode, served = metrics.RcodeNoError, metrics.ServedSuppressed
 			r.Response = true
@@ -93,10 +93,10 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 
 	var mapper Transformer
 	switch act {
-	case rtr.ActionPass:
-	case rtr.ActionBlackhole:
+	case matcher.ActionPass:
+	case matcher.ActionBlackhole:
 		mapper = blackholeTransform
-	case rtr.ActionRemap:
+	case matcher.ActionRemap:
 		ttl := uint32(s.ipMapper.GetTTL().Seconds() * 0.8)
 		mapper = func(a *dns.A) (*dns.A, error) {
 			fakeIP, mapErr := s.ipMapper.Map(a.Addr.AsSlice())

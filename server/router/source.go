@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+
+	"github.com/k-danil/antizapret-go/server/router/matcher"
 )
 
 type Source struct {
 	Name   string
-	Action Action
+	Action matcher.Action
 	URI    string
 	Parser Parser
 	Filter *Filter

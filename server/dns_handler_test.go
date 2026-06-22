@@ -39,7 +39,7 @@ func remapServer(t *testing.T, domain string) *Server {
 
 	r, err := rtr.NewRouter([]cfg.Matcher{
 		{Name: "s", Type: cfg.RouterTypeRemap, Source: "file://" + listPath, Format: cfg.FormatPlain, Subdomains: new(true)},
-	}, store)
+	}, store, cfg.MatcherRadix)
 	require.NoError(t, err)
 	require.NoError(t, r.Rebuild(context.Background()))
 
@@ -74,7 +74,7 @@ func TestDNSHandlerServfailOnResolveFailure(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
-	router, err := rtr.NewRouter(nil, store) // без источников → всё passthrough
+	router, err := rtr.NewRouter(nil, store, cfg.MatcherRadix) // без источников → всё passthrough
 	require.NoError(t, err)
 
 	res, err := resolver.NewResolver([]cfg.Upstream{

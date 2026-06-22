@@ -9,6 +9,7 @@ import (
 
 	"github.com/k-danil/antizapret-go/cfg"
 	rtr "github.com/k-danil/antizapret-go/server/router"
+	"github.com/k-danil/antizapret-go/server/router/matcher"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,7 +73,7 @@ func TestPolicyRebuilderInitialRebuildSignalsReady(t *testing.T) {
 	sub := true
 	router, err := rtr.NewRouter([]cfg.Matcher{
 		{Name: "s", Type: cfg.RouterTypeRemap, Source: "file://" + listPath, Format: cfg.FormatPlain, Subdomains: &sub},
-	}, store)
+	}, store, cfg.MatcherRadix)
 	require.NoError(t, err)
 
 	s := &Server{router: router, rebuildReady: make(chan struct{}), rebuildTimeout: 5 * time.Second}
@@ -85,5 +86,5 @@ func TestPolicyRebuilderInitialRebuildSignalsReady(t *testing.T) {
 		require.FailNow(t, "первый rebuild не просигналил rebuildReady")
 	}
 
-	require.Equal(t, rtr.ActionRemap, s.router.Lookup("blocked.test"), "первый rebuild загрузил правило")
+	require.Equal(t, matcher.ActionRemap, s.router.Lookup("blocked.test"), "первый rebuild загрузил правило")
 }

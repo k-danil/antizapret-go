@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	codeberg.org/miekg/dns v0.6.81
+	github.com/blevesearch/vellum v1.2.0
 	github.com/coreos/go-iptables v0.8.0
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/google/nftables v0.3.0
@@ -19,6 +20,8 @@ require (
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/bits-and-blooms/bitset v1.24.2 // indirect
+	github.com/blevesearch/mmap-go v1.2.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
