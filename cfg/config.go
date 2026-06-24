@@ -116,7 +116,7 @@ upstreams:
     dsn: "udp://8.8.8.8:53"
     timeout: 1s
 policy:
-  reload_interval: 6h
+  reload_interval: 1h
   rebuild_timeout: 1m
   matcher_backend: fst
   matchers:
@@ -137,7 +137,7 @@ firewall:
   chain: "ANTIZAPRET_CHAIN"
   ttl: 5m
 request_timeout: 2s
-logging_severity: "debug"
+logging_severity: "error"
 state_path: "/var/lib/antizapret-go/state"`
 
 func ReadConfig(configFilename string) error {
