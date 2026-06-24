@@ -11,12 +11,12 @@ import (
 	"github.com/k-danil/antizapret-go/cfg"
 	"github.com/k-danil/antizapret-go/log"
 	"github.com/k-danil/antizapret-go/server/router/matcher"
-	"github.com/k-danil/antizapret-go/utils"
+	"github.com/k-danil/antizapret-go/server/router/store"
 )
 
 type Router struct {
 	sources []Source
-	store   *Store
+	store   *store.Store
 	backend cfg.MatcherBackend
 
 	m atomic.Pointer[matcherBox]
@@ -24,182 +24,141 @@ type Router struct {
 
 type matcherBox struct{ matcher.Matcher }
 
-func NewRouter(matchers []cfg.Matcher, store *Store, backend cfg.MatcherBackend) (r *Router, err error) {
+func NewRouter(matchers []cfg.Matcher, st *store.Store, backend cfg.MatcherBackend) (r *Router, err error) {
 	sources := make([]Source, 0, len(matchers))
 	for _, m := range matchers {
-		s := Source{Name: m.Name, URI: m.Source, Prune: m.Prune}
-
-		switch m.Type {
-		case cfg.RouterTypeBlackhole:
-			s.Action = matcher.ActionBlackhole
-		case cfg.RouterTypeRemap:
-			s.Action = matcher.ActionRemap
-		case cfg.RouterTypePassthrough:
-			s.Action = matcher.ActionPass
-		default:
-			err = fmt.Errorf("unknown router type `%s` for source `%s`", m.Type, m.Name)
+		var s Source
+		if s, err = newSource(m); err != nil {
 			return
 		}
-
-		subdomains := true
-		if m.Subdomains != nil {
-			subdomains = *m.Subdomains
-		}
-
-		if s.Parser, err = newParser(m, subdomains); err != nil {
-			return
-		}
-
-		if s.Filter, err = newFilter(m); err != nil {
-			return
-		}
-
 		sources = append(sources, s)
 	}
 
-	r = &Router{sources: sources, store: store, backend: backend}
+	r = &Router{sources: sources, store: st, backend: backend}
 	return
 }
 
-// Rebuild best-effort: сбойный/пустой источник откатывается на last-known-good из store.
 func (r *Router) Rebuild(ctx context.Context) (err error) {
-	// источники тянутся параллельно, но в radix вставляются в исходном порядке —
-	// last-wins и prune зависят от порядка.
-	results := make([]sourceResult, len(r.sources))
+	results := make([]refreshResult, len(r.sources))
+	errs := make([]error, len(r.sources))
 	var wg sync.WaitGroup
 	for i := range r.sources {
-		wg.Go(func() { results[i] = r.loadSource(ctx, r.sources[i]) })
+		wg.Go(func() { results[i], errs[i] = r.sources[i].refresh(ctx, r.store) })
 	}
 	wg.Wait()
 
-	radix := matcher.NewRadix[matcher.Action]()
-	var (
-		length int
-		errs   []error
-	)
-	for i, s := range r.sources {
-		if results[i].err != nil {
-			errs = append(errs, results[i].err)
+	var all []error
+	anyUpdated := false
+	for i := range results {
+		if errs[i] != nil {
+			all = append(all, errs[i])
 		}
-		insertEntries(radix, s.Action, s.Prune, results[i].entries)
-		length += len(results[i].entries)
+		if results[i] == refreshUpdated {
+			anyUpdated = true
+		}
 	}
 
-	box, cerr := r.compile(radix)
-	if cerr != nil {
-		errs = append(errs, fmt.Errorf("compile matcher: %w", cerr))
-	} else {
-		r.m.Store(box)
-		log.L.Infow("router rebuilt", "length", length, "backend", string(r.backend))
+	removed, rerr := r.store.Retain(r.sourceNames())
+	if rerr != nil {
+		log.L.Warnw("failed to prune stale runs", "err", rerr)
 	}
 
-	if len(errs) > 0 {
-		err = errors.Join(errs...)
+	if anyUpdated || removed > 0 || r.m.Load() == nil {
+		box, fstData, n, cerr := r.compile()
+		if cerr != nil {
+			all = append(all, fmt.Errorf("compile matcher: %w", cerr))
+		} else {
+			r.m.Store(box)
+			r.persistFST(fstData)
+			log.L.Infow("router rebuilt", "length", n, "backend", string(r.backend))
+		}
+	}
+
+	if len(all) > 0 {
+		err = errors.Join(all...)
 	}
 	return
 }
 
-func (r *Router) compile(rx *matcher.Radix[matcher.Action]) (*matcherBox, error) {
-	// пустой бэкенд → FST (дефолт)
+func (r *Router) LoadCached() int {
+	if r.backend != cfg.MatcherRadix {
+		if data, lerr := r.store.LoadFST(); lerr == nil {
+			if m, merr := matcher.LoadFST(data); merr == nil {
+				r.m.Store(&matcherBox{m})
+				return len(data)
+			}
+		}
+	}
+
+	box, fstData, n, err := r.compile()
+	if err != nil || n == 0 {
+		return 0
+	}
+	r.m.Store(box)
+	r.persistFST(fstData)
+	return n
+}
+
+func (r *Router) compile() (box *matcherBox, fstData []byte, n int, err error) {
+	srcs, closers := r.openRuns()
+	defer func() {
+		for _, c := range closers {
+			_ = c.Close()
+		}
+	}()
+
+	var m matcher.Matcher
 	switch r.backend {
 	case cfg.MatcherRadix:
-		return &matcherBox{matcher.NewRadixMatcher(rx)}, nil
+		if m, n, err = matcher.BuildRadix(srcs); err != nil {
+			return
+		}
 	default:
-		m, err := matcher.NewFSTMatcher(rx)
-		if err != nil {
-			return nil, err
+		if m, fstData, n, err = matcher.BuildFST(srcs); err != nil {
+			return
 		}
-		return &matcherBox{m}, nil
 	}
+	box = &matcherBox{m}
+	return
 }
 
-type sourceResult struct {
-	entries []Entry
-	err     error
-}
-
-// loadSource тянет источник; на сбое или подозрительно пустом ответе откатывается
-// на last-known-good из store, чтобы транзиентная проблема источника не меняла
-// поведение прокси.
-func (r *Router) loadSource(ctx context.Context, s Source) sourceResult {
-	entries, ferr := r.fetchSource(ctx, s)
-	if ferr == nil && len(entries) > 0 {
-		if serr := r.store.Save(s.Name, entries); serr != nil {
-			log.L.Warnw("failed to persist source cache", "source", s.Name, "err", serr)
-		}
-		return sourceResult{entries: entries}
-	}
-
-	cached, lerr := r.store.Load(s.Name)
-	if lerr != nil {
-		if ferr != nil {
-			return sourceResult{err: fmt.Errorf("source `%s`: fetch failed (%w), no cache (%v)", s.Name, ferr, lerr)}
-		}
-		log.L.Warnw("source returned empty, no cache to fall back on", "source", s.Name)
-		return sourceResult{}
-	}
-	log.L.Warnw("source unusable, using cached entries", "source", s.Name, "fetched", len(entries), "err", ferr)
-	return sourceResult{entries: cached}
-}
-
-// LoadCached строит radix только из кэша; 0 => холодный старт (кэша нет).
-func (r *Router) LoadCached() (n int) {
-	radix := matcher.NewRadix[matcher.Action]()
+func (r *Router) openRuns() (srcs []matcher.RunSource, closers []io.Closer) {
 	for _, s := range r.sources {
-		entries, err := r.store.Load(s.Name)
-		if err != nil {
+		_, rr, oerr := r.store.OpenRun(s.Name)
+		if oerr != nil {
 			continue
 		}
-		insertEntries(radix, s.Action, s.Prune, entries)
-		n += len(entries)
-	}
-	if n > 0 {
-		box, err := r.compile(radix)
-		if err != nil {
-			log.L.Warnw("failed to compile cached matcher", "err", err)
-			return 0
-		}
-		r.m.Store(box)
+		closers = append(closers, rr)
+		srcs = append(srcs, matcher.RunSource{
+			Action: s.Action,
+			Prune:  s.Prune,
+			Next: func() ([]byte, matcher.MatchMode, bool) {
+				rec, ok, nerr := rr.Next()
+				if nerr != nil || !ok {
+					return nil, 0, false
+				}
+				return rec.Key, matcher.MatchMode(rec.Mode), true
+			},
+		})
 	}
 	return
 }
 
-func (r *Router) fetchSource(ctx context.Context, s Source) (entries []Entry, err error) {
-	var rdr io.ReadCloser
-	if rdr, err = s.GetReader(ctx); err != nil {
-		err = fmt.Errorf("failed to get reader for source `%s`: %w", s.Name, err)
+func (r *Router) persistFST(data []byte) {
+	if data == nil {
 		return
 	}
-	defer func() { _ = rdr.Close() }()
-
-	if err = s.Parser.Parse(rdr, func(e Entry) {
-		domain := utils.NormalizeDomain(e.Domain)
-		if domain == "" {
-			log.L.Warnw("skipped entry in source", "entry", e.Domain, "source", s.Name)
-			return
-		}
-		if !s.Filter.Keep(domain) {
-			return
-		}
-		entries = append(entries, Entry{Domain: domain, Subdomains: e.Subdomains})
-	}); err != nil {
-		err = fmt.Errorf("failed to read source `%s`: %w", s.Name, err)
+	if err := r.store.SaveFST(data); err != nil {
+		log.L.Warnw("failed to persist FST", "err", err)
 	}
-
-	return
 }
 
-func insertEntries(radix *matcher.Radix[matcher.Action], action matcher.Action, prune bool, entries []Entry) {
-	for _, e := range entries {
-		mode := matcher.MatchExact
-		if e.Subdomains {
-			mode = matcher.MatchPrefix
-		}
-		radix.Insert(e.Domain, action, mode)
-		if prune {
-			radix.PruneBelow(e.Domain)
-		}
+func (r *Router) sourceNames() []string {
+	names := make([]string, len(r.sources))
+	for i, s := range r.sources {
+		names[i] = s.Name
 	}
+	return names
 }
 
 func (r *Router) Lookup(domain string) matcher.Action {

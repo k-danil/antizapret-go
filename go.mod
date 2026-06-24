@@ -11,7 +11,6 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/stretchr/testify v1.11.1
-	go.etcd.io/bbolt v1.5.0
 	go.uber.org/config v1.4.1
 	go.uber.org/zap v1.28.0
 	golang.org/x/net v0.56.0

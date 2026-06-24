@@ -138,7 +138,7 @@ firewall:
   ttl: 5m
 request_timeout: 2s
 logging_severity: "debug"
-state_path: "/var/lib/antizapret-go/state.db"`
+state_path: "/var/lib/antizapret-go/state"`
 
 func ReadConfig(configFilename string) error {
 	return readConfig(configFilename, AntizapretDefaultConfig, &Antizapret)

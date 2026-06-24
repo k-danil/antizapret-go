@@ -14,6 +14,7 @@ import (
 	"github.com/k-danil/antizapret-go/server/cache"
 	"github.com/k-danil/antizapret-go/server/resolver"
 	rtr "github.com/k-danil/antizapret-go/server/router"
+	"github.com/k-danil/antizapret-go/server/router/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,13 +34,13 @@ func remapServer(t *testing.T, domain string) *Server {
 	listPath := filepath.Join(dir, "list.txt")
 	require.NoError(t, os.WriteFile(listPath, []byte(domain), 0o600))
 
-	store, err := rtr.NewStore(filepath.Join(dir, "state.db"))
+	st, err := store.New(dir)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	r, err := rtr.NewRouter([]cfg.Matcher{
 		{Name: "s", Type: cfg.RouterTypeRemap, Source: "file://" + listPath, Format: cfg.FormatPlain, Subdomains: new(true)},
-	}, store, cfg.MatcherRadix)
+	}, st, cfg.MatcherRadix)
 	require.NoError(t, err)
 	require.NoError(t, r.Rebuild(context.Background()))
 
@@ -70,11 +71,11 @@ func TestDNSHandlerSuppressesHTTPSAndSVCBForRemap(t *testing.T) {
 }
 
 func TestDNSHandlerServfailOnResolveFailure(t *testing.T) {
-	store, err := rtr.NewStore(filepath.Join(t.TempDir(), "state.db"))
+	st, err := store.New(t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
-	router, err := rtr.NewRouter(nil, store, cfg.MatcherRadix) // без источников → всё passthrough
+	router, err := rtr.NewRouter(nil, st, cfg.MatcherRadix) // без источников → всё passthrough
 	require.NoError(t, err)
 
 	res, err := resolver.NewResolver([]cfg.Upstream{
