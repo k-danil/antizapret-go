@@ -12,7 +12,6 @@ import (
 	"github.com/k-danil/antizapret-go/log"
 	"github.com/k-danil/antizapret-go/server/router/matcher"
 	"github.com/k-danil/antizapret-go/server/router/store"
-	"github.com/k-danil/antizapret-go/utils"
 )
 
 type Router struct {
@@ -28,33 +27,10 @@ type matcherBox struct{ matcher.Matcher }
 func NewRouter(matchers []cfg.Matcher, st *store.Store, backend cfg.MatcherBackend) (r *Router, err error) {
 	sources := make([]Source, 0, len(matchers))
 	for _, m := range matchers {
-		s := Source{Name: m.Name, URI: m.Source, Prune: m.Prune}
-
-		switch m.Type {
-		case cfg.RouterTypeBlackhole:
-			s.Action = matcher.ActionBlackhole
-		case cfg.RouterTypeRemap:
-			s.Action = matcher.ActionRemap
-		case cfg.RouterTypePassthrough:
-			s.Action = matcher.ActionPass
-		default:
-			err = fmt.Errorf("unknown router type `%s` for source `%s`", m.Type, m.Name)
+		var s Source
+		if s, err = newSource(m); err != nil {
 			return
 		}
-
-		subdomains := true
-		if m.Subdomains != nil {
-			subdomains = *m.Subdomains
-		}
-
-		if s.Parser, err = newParser(m, subdomains); err != nil {
-			return
-		}
-
-		if s.Filter, err = newFilter(m); err != nil {
-			return
-		}
-
 		sources = append(sources, s)
 	}
 
@@ -63,31 +39,39 @@ func NewRouter(matchers []cfg.Matcher, st *store.Store, backend cfg.MatcherBacke
 }
 
 func (r *Router) Rebuild(ctx context.Context) (err error) {
+	results := make([]refreshResult, len(r.sources))
 	errs := make([]error, len(r.sources))
 	var wg sync.WaitGroup
 	for i := range r.sources {
-		wg.Go(func() { errs[i] = r.refreshSource(ctx, r.sources[i]) })
+		wg.Go(func() { results[i], errs[i] = r.sources[i].refresh(ctx, r.store) })
 	}
 	wg.Wait()
 
 	var all []error
-	for _, e := range errs {
-		if e != nil {
-			all = append(all, e)
+	anyUpdated := false
+	for i := range results {
+		if errs[i] != nil {
+			all = append(all, errs[i])
+		}
+		if results[i] == refreshUpdated {
+			anyUpdated = true
 		}
 	}
 
-	box, fstData, n, cerr := r.compile()
-	if cerr != nil {
-		all = append(all, fmt.Errorf("compile matcher: %w", cerr))
-	} else {
-		r.m.Store(box)
-		r.persistFST(fstData)
-		log.L.Infow("router rebuilt", "length", n, "backend", string(r.backend))
+	removed, rerr := r.store.Retain(r.sourceNames())
+	if rerr != nil {
+		log.L.Warnw("failed to prune stale runs", "err", rerr)
 	}
 
-	if rerr := r.store.Retain(r.sourceNames()); rerr != nil {
-		log.L.Warnw("failed to prune stale runs", "err", rerr)
+	if anyUpdated || removed > 0 || r.m.Load() == nil {
+		box, fstData, n, cerr := r.compile()
+		if cerr != nil {
+			all = append(all, fmt.Errorf("compile matcher: %w", cerr))
+		} else {
+			r.m.Store(box)
+			r.persistFST(fstData)
+			log.L.Infow("router rebuilt", "length", n, "backend", string(r.backend))
+		}
 	}
 
 	if len(all) > 0 {
@@ -158,63 +142,6 @@ func (r *Router) openRuns() (srcs []matcher.RunSource, closers []io.Closer) {
 		})
 	}
 	return
-}
-
-// на сбое/пустом источнике run не перезаписываем — merge возьмёт прежний (last-known-good).
-func (r *Router) refreshSource(ctx context.Context, s Source) error {
-	entries, ferr := r.fetchSource(ctx, s)
-	if ferr == nil && len(entries) > 0 {
-		if werr := r.store.WriteRun(s.Name, store.Validator{}, toRecords(entries)); werr != nil {
-			return fmt.Errorf("source `%s`: persist run: %w", s.Name, werr)
-		}
-		return nil
-	}
-
-	if r.store.HasRun(s.Name) {
-		log.L.Warnw("source unusable, keeping cached run", "source", s.Name, "fetched", len(entries), "err", ferr)
-		return nil
-	}
-	if ferr != nil {
-		return fmt.Errorf("source `%s`: fetch failed (%w), no cache", s.Name, ferr)
-	}
-	log.L.Warnw("source returned empty, no cache to fall back on", "source", s.Name)
-	return nil
-}
-
-func (r *Router) fetchSource(ctx context.Context, s Source) (entries []Entry, err error) {
-	var rdr io.ReadCloser
-	if rdr, err = s.GetReader(ctx); err != nil {
-		err = fmt.Errorf("failed to get reader for source `%s`: %w", s.Name, err)
-		return
-	}
-	defer func() { _ = rdr.Close() }()
-
-	if err = s.Parser.Parse(rdr, func(e Entry) {
-		domain := utils.NormalizeDomain(e.Domain)
-		if domain == "" {
-			log.L.Warnw("skipped entry in source", "entry", e.Domain, "source", s.Name)
-			return
-		}
-		if !s.Filter.Keep(domain) {
-			return
-		}
-		entries = append(entries, Entry{Domain: domain, Subdomains: e.Subdomains})
-	}); err != nil {
-		err = fmt.Errorf("failed to read source `%s`: %w", s.Name, err)
-	}
-	return
-}
-
-func toRecords(entries []Entry) []store.Record {
-	recs := make([]store.Record, len(entries))
-	for i, e := range entries {
-		mode := byte(matcher.MatchExact)
-		if e.Subdomains {
-			mode = byte(matcher.MatchPrefix)
-		}
-		recs[i] = store.Record{Key: matcher.ReverseLabels(e.Domain), Mode: mode}
-	}
-	return recs
 }
 
 func (r *Router) persistFST(data []byte) {

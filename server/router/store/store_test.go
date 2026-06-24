@@ -1,6 +1,8 @@
 package store
 
 import (
+	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,7 +49,9 @@ func TestRetainRemovesOrphans(t *testing.T) {
 	require.NoError(t, s.WriteRun("keep", Validator{}, nil))
 	require.NoError(t, s.WriteRun("drop", Validator{}, nil))
 
-	require.NoError(t, s.Retain([]string{"keep"}))
+	removed, err := s.Retain([]string{"keep"})
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
 
 	_, r, err := s.OpenRun("keep")
 	require.NoError(t, err)
@@ -79,4 +83,56 @@ func TestNewCleansStaleTemps(t *testing.T) {
 	require.NoError(t, err)
 	_, err = os.Stat(stale)
 	require.True(t, os.IsNotExist(err))
+}
+
+func TestOpenRunRejectsForeignOrFutureFormat(t *testing.T) {
+	s, _ := New(t.TempDir())
+	write := func(name string, data []byte) {
+		require.NoError(t, os.WriteFile(filepath.Join(s.runsDir, runFile(name)), data, 0o600))
+	}
+
+	write("garbage", []byte("not-azrs-at-all"))
+	_, _, err := s.OpenRun("garbage")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrNotFound) // присутствует, но битый — это не «нет файла»
+
+	write("future", append([]byte(magic), formatVersion+1))
+	_, _, err = s.OpenRun("future")
+	require.Error(t, err)
+}
+
+func TestOpenRunSkipsUnknownSection(t *testing.T) {
+	s, _ := New(t.TempDir())
+
+	var buf bytes.Buffer
+	require.NoError(t, writePreamble(&buf))
+	require.NoError(t, writeSection(&buf, secETag, []byte("tag")))
+	require.NoError(t, writeSection(&buf, 99, []byte("из будущего"))) // unknown → должен скипнуться
+
+	rec := Record{Key: []byte("com.x"), Mode: 2}
+	var sh [sectionHeaderLen]byte
+	sh[0] = secData
+	binary.BigEndian.PutUint32(sh[1:], uint32(recordHeaderLen+len(rec.Key)))
+	buf.Write(sh[:])
+	var rh [recordHeaderLen]byte
+	rh[0] = rec.Mode
+	binary.BigEndian.PutUint16(rh[1:], uint16(len(rec.Key)))
+	buf.Write(rh[:])
+	buf.Write(rec.Key)
+
+	require.NoError(t, os.WriteFile(filepath.Join(s.runsDir, runFile("x")), buf.Bytes(), 0o600))
+
+	v, r, err := s.OpenRun("x")
+	require.NoError(t, err)
+	defer func() { _ = r.Close() }()
+	require.Equal(t, "tag", v.ETag) // валидатор прочитан, несмотря на чужую секцию между ним и DATA
+
+	got, ok, err := r.Next()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, rec, Record{Key: append([]byte(nil), got.Key...), Mode: got.Mode})
+
+	_, ok, err = r.Next()
+	require.NoError(t, err)
+	require.False(t, ok)
 }

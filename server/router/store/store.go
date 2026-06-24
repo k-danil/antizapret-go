@@ -2,17 +2,14 @@ package store
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -26,11 +23,11 @@ const (
 var ErrNotFound = errors.New("not found")
 
 type Validator struct {
-	ETag         string `json:"etag,omitempty"`
-	LastModified string `json:"lm,omitempty"`
-	MTime        int64  `json:"mtime,omitempty"`
-	Size         int64  `json:"size,omitempty"`
-	Fingerprint  string `json:"fp,omitempty"`
+	ETag         string
+	LastModified string
+	MTime        int64
+	Size         int64
+	Fingerprint  string
 }
 
 type Record struct {
@@ -46,11 +43,12 @@ type Store struct {
 func New(dir string) (s *Store, err error) {
 	runsDir := filepath.Join(dir, runsSubdir)
 	if err = os.MkdirAll(runsDir, 0o755); err != nil {
-		return nil, fmt.Errorf("store: mkdir `%s`: %w", runsDir, err)
+		err = fmt.Errorf("store: mkdir `%s`: %w", runsDir, err)
+		return
 	}
 	s = &Store{dir: dir, runsDir: runsDir}
 	s.cleanTemps()
-	return s, nil
+	return
 }
 
 // хэш-суффикс — sanitize неинъективна, иначе разные имена дали бы один файл.
@@ -90,9 +88,9 @@ func (s *Store) cleanTemps() {
 
 // temp в той же дире — rename атомарен лишь внутри одной ФС.
 func writeAtomic(path string, write func(io.Writer) error) (err error) {
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*"+tmpSuffix)
-	if err != nil {
-		return err
+	var tmp *os.File
+	if tmp, err = os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*"+tmpSuffix); err != nil {
+		return
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -104,131 +102,126 @@ func writeAtomic(path string, write func(io.Writer) error) (err error) {
 
 	bw := bufio.NewWriter(tmp)
 	if err = write(bw); err != nil {
-		return err
+		return
 	}
 	if err = bw.Flush(); err != nil {
-		return err
+		return
 	}
 	if err = tmp.Sync(); err != nil {
-		return err
+		return
 	}
 	if err = tmp.Close(); err != nil {
-		return err
+		return
 	}
 	return os.Rename(tmpName, path)
 }
 
 func (s *Store) WriteRun(name string, v Validator, recs []Record) error {
-	slices.SortFunc(recs, func(a, b Record) int { return bytes.Compare(a.Key, b.Key) })
 	path := filepath.Join(s.runsDir, runFile(name))
-	return writeAtomic(path, func(w io.Writer) error {
-		hdr, err := json.Marshal(v)
-		if err != nil {
-			return err
+	return writeAtomic(path, func(w io.Writer) (err error) {
+		if err = writePreamble(w); err != nil {
+			return
 		}
-		var u [4]byte
-		binary.BigEndian.PutUint32(u[:], uint32(len(hdr)))
-		if _, err = w.Write(u[:]); err != nil {
-			return err
+		if err = writeValidator(w, v); err != nil {
+			return
 		}
-		if _, err = w.Write(hdr); err != nil {
-			return err
-		}
-		var rh [3]byte
-		for _, r := range recs {
-			rh[0] = r.Mode
-			binary.BigEndian.PutUint16(rh[1:], uint16(len(r.Key)))
-			if _, err = w.Write(rh[:]); err != nil {
-				return err
-			}
-			if _, err = w.Write(r.Key); err != nil {
-				return err
-			}
-		}
-		return nil
+		return writeData(w, recs)
 	})
 }
 
 type RunReader struct {
-	f  *os.File
-	br *bufio.Reader
+	f      *os.File
+	br     *bufio.Reader
+	remain uint32
 }
 
 func (s *Store) OpenRun(name string) (v Validator, r *RunReader, err error) {
-	f, err := os.Open(filepath.Join(s.runsDir, runFile(name)))
-	if err != nil {
+	var f *os.File
+	if f, err = os.Open(filepath.Join(s.runsDir, runFile(name))); err != nil {
 		if os.IsNotExist(err) {
 			err = ErrNotFound
 		}
-		return Validator{}, nil, err
+		return
 	}
-	br := bufio.NewReader(f)
 
-	var u [4]byte
-	if _, err = io.ReadFull(br, u[:]); err != nil {
+	br := bufio.NewReader(f)
+	var dataLen uint32
+	if v, dataLen, err = readHeader(br); err != nil {
 		_ = f.Close()
-		return Validator{}, nil, fmt.Errorf("store: run `%s` header: %w", name, err)
+		err = fmt.Errorf("store: run `%s`: %w", name, err)
+		return
 	}
-	hdr := make([]byte, binary.BigEndian.Uint32(u[:]))
-	if _, err = io.ReadFull(br, hdr); err != nil {
-		_ = f.Close()
-		return Validator{}, nil, fmt.Errorf("store: run `%s` header: %w", name, err)
-	}
-	if err = json.Unmarshal(hdr, &v); err != nil {
-		_ = f.Close()
-		return Validator{}, nil, fmt.Errorf("store: run `%s` header: %w", name, err)
-	}
-	return v, &RunReader{f: f, br: br}, nil
+	r = &RunReader{f: f, br: br, remain: dataLen}
+	return
 }
 
 func (r *RunReader) Next() (rec Record, ok bool, err error) {
-	var rh [3]byte
+	if r.remain < recordHeaderLen {
+		return
+	}
+	var rh [recordHeaderLen]byte
 	if _, err = io.ReadFull(r.br, rh[:]); err != nil {
-		if errors.Is(err, io.EOF) {
-			return Record{}, false, nil
-		}
-		return Record{}, false, err
+		return
 	}
-	key := make([]byte, binary.BigEndian.Uint16(rh[1:]))
+	keyLen := uint32(binary.BigEndian.Uint16(rh[1:]))
+	r.remain -= recordHeaderLen
+	if keyLen > r.remain {
+		err = fmt.Errorf("store: truncated record")
+		return
+	}
+	key := make([]byte, keyLen)
 	if _, err = io.ReadFull(r.br, key); err != nil {
-		return Record{}, false, err
+		return
 	}
-	return Record{Key: key, Mode: rh[0]}, true, nil
+	r.remain -= keyLen
+	rec = Record{Key: key, Mode: rh[0]}
+	ok = true
+	return
 }
 
 func (r *RunReader) Close() error { return r.f.Close() }
 
-func (s *Store) HasRun(name string) bool {
-	_, err := os.Stat(filepath.Join(s.runsDir, runFile(name)))
-	return err == nil
+func (s *Store) LoadValidator(name string) (v Validator, err error) {
+	var f *os.File
+	if f, err = os.Open(filepath.Join(s.runsDir, runFile(name))); err != nil {
+		if os.IsNotExist(err) {
+			err = ErrNotFound
+		}
+		return
+	}
+	defer func() { _ = f.Close() }()
+	v, _, err = readHeader(bufio.NewReader(f))
+	return
 }
 
-func (s *Store) LoadFST() ([]byte, error) {
-	data, err := os.ReadFile(filepath.Join(s.dir, fstName))
-	if err != nil {
+func (s *Store) LoadFST() (data []byte, err error) {
+	var raw []byte
+	if raw, err = os.ReadFile(filepath.Join(s.dir, fstName)); err != nil {
 		if os.IsNotExist(err) {
-			return nil, ErrNotFound
+			err = ErrNotFound
 		}
-		return nil, err
+		return
 	}
-	return data, nil
+	return sectionValue(raw, secData)
 }
 
 func (s *Store) SaveFST(data []byte) error {
-	return writeAtomic(filepath.Join(s.dir, fstName), func(w io.Writer) error {
-		_, err := w.Write(data)
-		return err
+	return writeAtomic(filepath.Join(s.dir, fstName), func(w io.Writer) (err error) {
+		if err = writePreamble(w); err != nil {
+			return
+		}
+		return writeSection(w, secData, data)
 	})
 }
 
-func (s *Store) Retain(names []string) error {
+func (s *Store) Retain(names []string) (removed int, err error) {
 	keep := make(map[string]struct{}, len(names))
 	for _, n := range names {
 		keep[runFile(n)] = struct{}{}
 	}
-	entries, err := os.ReadDir(s.runsDir)
-	if err != nil {
-		return err
+	var entries []os.DirEntry
+	if entries, err = os.ReadDir(s.runsDir); err != nil {
+		return
 	}
 	for _, e := range entries {
 		n := e.Name()
@@ -237,10 +230,12 @@ func (s *Store) Retain(names []string) error {
 			continue
 		}
 		if _, ok := keep[n]; !ok && strings.HasSuffix(n, runSuffix) {
-			_ = os.Remove(filepath.Join(s.runsDir, n))
+			if os.Remove(filepath.Join(s.runsDir, n)) == nil {
+				removed++
+			}
 		}
 	}
-	return nil
+	return
 }
 
 func (s *Store) Close() error { return nil }
