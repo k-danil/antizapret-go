@@ -7,7 +7,7 @@ upstreams:
     dsn: "udp://8.8.8.8:53"
     timeout: 1s
 policy:
-  reload_interval: 6h
+  reload_interval: 1h
   matchers:
     - name: "hosts"
       type: "remap"
@@ -26,5 +26,5 @@ firewall:
   chain: "ANTIZAPRET_CHAIN"
   ttl: 5m
 request_timeout: 2s
-logging_severity: "debug"
-state_path: "/var/lib/antizapret-go/state.db"
+logging_severity: "error"
+state_path: "/var/lib/antizapret-go/state"
