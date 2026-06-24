@@ -57,6 +57,15 @@ func (r *Radix[T]) Insert(key string, val T, mode MatchMode) {
 	r.root.insert(ReverseLabels(key), val, mode)
 }
 
+// InsertReversed вставляет уже обращённый ключ, минуя ReverseLabels. Ключ удерживается
+// как prefix узлов — передавай владеемый буфер.
+func (r *Radix[T]) InsertReversed(revKey []byte, val T, mode MatchMode) {
+	if len(revKey) == 0 {
+		return
+	}
+	r.root.insert(revKey, val, mode)
+}
+
 func (n *radixNode[T]) insert(s []byte, val T, mode MatchMode) {
 	if len(s) == 0 {
 		n.value = val
@@ -190,39 +199,6 @@ func (n *radixNode[T]) get(s []byte, bestVal T, bestOk bool) (T, bool) {
 	return bestVal, bestOk
 }
 
-// PruneBelow обрезает все более специфичные ветки под key (узел key сохраняется).
-// Вызывать после Insert(key, ...): тогда узел key гарантированно существует.
-func (r *Radix[T]) PruneBelow(key string) {
-	if key == "" {
-		return
-	}
-	r.root.pruneBelow(ReverseLabels(key))
-}
-
-func (n *radixNode[T]) pruneBelow(s []byte) {
-	if len(s) == 0 {
-		n.children = nil
-		return
-	}
-
-	i, ok := slices.BinarySearchFunc(n.children, s[0], func(c child[T], u uint8) int {
-		return cmp.Compare(c.key, u)
-	})
-	if !ok {
-		return
-	}
-
-	ch := n.children[i].node
-	if len(s) < len(ch.prefix) || !bytes.HasPrefix(s, ch.prefix) {
-		return
-	}
-	if len(s) == len(ch.prefix) {
-		ch.children = nil
-		return
-	}
-	ch.pruneBelow(s[len(ch.prefix):])
-}
-
 func reverseLabelsInto(b *bytes.Buffer, key string) {
 	end := len(key)
 	for end >= 0 {
@@ -240,30 +216,10 @@ func reverseLabelsInto(b *bytes.Buffer, key string) {
 	}
 }
 
-// ReverseLabels отдаёт владеемую копию — Insert/PruneBelow сохраняют её как prefix узлов.
+// ReverseLabels отдаёт владеемую копию — Insert сохраняет её как prefix узлов.
 func ReverseLabels(key string) []byte {
 	var b bytes.Buffer
 	b.Grow(len(key))
 	reverseLabelsInto(&b, key)
 	return b.Bytes()
-}
-
-// Walk перебирает узлы с match в лексикографическом порядке ключей. reversed —
-// переиспользуемый буфер: копируй, если сохраняешь его за пределами вызова.
-func (r *Radix[T]) Walk(fn func(reversed []byte, mode MatchMode, val T)) {
-	var buf []byte
-	var walk func(n *radixNode[T])
-	walk = func(n *radixNode[T]) {
-		buf = append(buf, n.prefix...)
-		if n.match != MatchNone {
-			fn(buf, n.match, n.value)
-		}
-		for i := range n.children {
-			walk(n.children[i].node)
-		}
-		buf = buf[:len(buf)-len(n.prefix)]
-	}
-	if r.root != nil {
-		walk(r.root)
-	}
 }

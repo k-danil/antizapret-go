@@ -8,12 +8,13 @@ import (
 
 	"github.com/k-danil/antizapret-go/cfg"
 	"github.com/k-danil/antizapret-go/server/router/matcher"
+	"github.com/k-danil/antizapret-go/server/router/store"
 	"github.com/stretchr/testify/require"
 )
 
-func newTestStore(t *testing.T) *Store {
+func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	s, err := NewStore(filepath.Join(t.TempDir(), "state.db"))
+	s, err := store.New(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	return s
@@ -79,4 +80,30 @@ func TestRebuildEmptySourceFallsBackToCache(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, nil, 0o600))
 	require.NoError(t, r.Rebuild(context.Background()))
 	require.Equal(t, matcher.ActionRemap, r.Lookup("x.com"), "пустой источник откатывается на кэш, не теряет домен")
+}
+
+// FST-бэкенд: ребилд компилирует и персистит matcher.fst, а новый роутер на той же
+// дире стартует из него без сети (warm-start).
+func TestFSTBackendPersistAndWarmStart(t *testing.T) {
+	dir := t.TempDir()
+	src := writeList(t, "blocked.test")
+
+	mk := func() *Router {
+		s, err := store.New(dir)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+		r, err := NewRouter([]cfg.Matcher{
+			{Name: "bl", Type: cfg.RouterTypeRemap, Source: src, Format: cfg.FormatPlain, Subdomains: new(true)},
+		}, s, cfg.MatcherFST)
+		require.NoError(t, err)
+		return r
+	}
+
+	r1 := mk()
+	require.NoError(t, r1.Rebuild(context.Background()))
+	require.Equal(t, matcher.ActionRemap, r1.Lookup("x.blocked.test"))
+
+	r2 := mk()
+	require.Greater(t, r2.LoadCached(), 0, "тёплый старт из персиста FST")
+	require.Equal(t, matcher.ActionRemap, r2.Lookup("x.blocked.test"), "обслуживает из загруженного FST")
 }

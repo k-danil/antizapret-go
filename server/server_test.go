@@ -10,6 +10,7 @@ import (
 	"github.com/k-danil/antizapret-go/cfg"
 	rtr "github.com/k-danil/antizapret-go/server/router"
 	"github.com/k-danil/antizapret-go/server/router/matcher"
+	"github.com/k-danil/antizapret-go/server/router/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,14 +67,14 @@ func TestPolicyRebuilderInitialRebuildSignalsReady(t *testing.T) {
 	listPath := filepath.Join(dir, "list.txt")
 	require.NoError(t, os.WriteFile(listPath, []byte("blocked.test"), 0o600))
 
-	store, err := rtr.NewStore(filepath.Join(dir, "state.db"))
+	st, err := store.New(dir)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
+	t.Cleanup(func() { _ = st.Close() })
 
 	sub := true
 	router, err := rtr.NewRouter([]cfg.Matcher{
 		{Name: "s", Type: cfg.RouterTypeRemap, Source: "file://" + listPath, Format: cfg.FormatPlain, Subdomains: &sub},
-	}, store, cfg.MatcherRadix)
+	}, st, cfg.MatcherRadix)
 	require.NoError(t, err)
 
 	s := &Server{router: router, rebuildReady: make(chan struct{}), rebuildTimeout: 5 * time.Second}

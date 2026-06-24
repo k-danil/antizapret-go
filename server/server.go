@@ -15,6 +15,7 @@ import (
 	"github.com/k-danil/antizapret-go/server/mapper"
 	"github.com/k-danil/antizapret-go/server/resolver"
 	rtr "github.com/k-danil/antizapret-go/server/router"
+	"github.com/k-danil/antizapret-go/server/router/store"
 )
 
 type Server struct {
@@ -22,7 +23,7 @@ type Server struct {
 	ipMapper    *mapper.IPMapper
 	fw          firewall.Manager
 	router      *rtr.Router
-	routerStore *rtr.Store
+	routerStore *store.Store
 	cache       *cache.Cache
 
 	timeout        time.Duration
@@ -48,7 +49,7 @@ func NewServer(cfg cfg.AntizapretConfig, fw firewall.Manager, m *metrics.Metrics
 
 	s.cache = cache.NewCache(uint64(cfg.Cache.Capacity), cfg.Cache.TTL, cfg.Cache.MinTTL, cfg.Cache.MaxTTL)
 
-	if s.routerStore, err = rtr.NewStore(cfg.StatePath); err != nil {
+	if s.routerStore, err = store.New(cfg.StatePath); err != nil {
 		return
 	}
 
@@ -101,8 +102,8 @@ func (s *Server) rebuild(ctx context.Context) {
 		log.L.Errorw("failed to rebuild router", "err", err)
 	}
 
-	// Rebuild оставляет мёртвыми старое дерево и парс-скрэтч (пик ~2.3×); сразу
-	// возвращаем страницы ОС — иначе scavenger тянет это медленно и RSS висит на пике.
+	// Rebuild оставляет мёртвыми парс-скрэтч источников, старый FST и буфер его сборки;
+	// сразу возвращаем страницы ОС — иначе scavenger тянет это медленно, RSS висит.
 	debug.FreeOSMemory()
 }
 
