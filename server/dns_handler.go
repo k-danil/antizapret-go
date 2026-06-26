@@ -44,6 +44,15 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 	act := s.router.Lookup(domain)
 	action = act.String()
 
+	if act == matcher.ActionNXDomain {
+		rcode, served = metrics.RcodeNXDomain, metrics.ServedSuppressed
+		r.Response = true
+		r.Rcode = dns.RcodeNameError
+		r.Answer, r.Ns, r.Extra = nil, nil, nil
+		reuseAndWrite(w, r)
+		return
+	}
+
 	// Для remap/blackhole-доменов глушим HTTPS/SVCB: их подсказки (ipv4hint, ECH)
 	// позволили бы клиенту пойти мимо подмены A-записи. Пустой NODATA заставляет
 	// клиента упасть на A-запрос, который будет подменён.

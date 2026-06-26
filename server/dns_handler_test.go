@@ -70,6 +70,38 @@ func TestDNSHandlerSuppressesHTTPSAndSVCBForRemap(t *testing.T) {
 	}
 }
 
+func TestDNSHandlerNXDomainSynthesizesNameError(t *testing.T) {
+	dir := t.TempDir()
+	listPath := filepath.Join(dir, "list.txt")
+	require.NoError(t, os.WriteFile(listPath, []byte("dns.google"), 0o600))
+
+	st, err := store.New(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	r, err := rtr.NewRouter([]cfg.Matcher{
+		{Name: "doh", Type: cfg.RouterTypeNXDomain, Source: "file://" + listPath, Format: cfg.FormatPlain, Subdomains: new(true)},
+	}, st, cfg.MatcherRadix)
+	require.NoError(t, err)
+	require.NoError(t, r.Rebuild(context.Background()))
+
+	// resolver nil: короткое замыкание обязано ответить, не уходя в апстрим
+	s := &Server{router: r, timeout: time.Second}
+
+	for _, q := range []dns.RR{&dns.A{}, &dns.AAAA{}, &dns.HTTPS{}} {
+		w := &captureWriter{}
+		s.DNSHandler(context.Background(), w, typedQuery("dns.google.", q))
+
+		require.GreaterOrEqualf(t, len(w.buf), 2, "%T: ответ записан", q)
+		parsed := &dns.Msg{Data: w.buf[2:]}
+		require.NoErrorf(t, parsed.Unpack(), "%T: unpack reply", q)
+
+		require.Truef(t, parsed.Response, "%T: QR bit", q)
+		require.EqualValuesf(t, dns.RcodeNameError, parsed.Rcode, "%T: NXDOMAIN", q)
+		require.Lenf(t, parsed.Answer, 0, "%T: пустой answer", q)
+	}
+}
+
 func TestDNSHandlerServfailOnResolveFailure(t *testing.T) {
 	st, err := store.New(t.TempDir())
 	require.NoError(t, err)
