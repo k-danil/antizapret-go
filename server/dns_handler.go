@@ -14,6 +14,30 @@ import (
 
 var blackholeAddr = netip.AddrFrom4([4]byte{127, 6, 6, 6})
 
+// Синтетический SOA в authority NXDOMAIN-ответа: без него (RFC 2308) резолверы не
+// кэшируют отрицательный ответ и переспрашивают апстрим на каждый запрос. Длительность
+// негативного кэша задают только TTL записи и Minttl; прочие таймеры инертны.
+const (
+	nxSOANegTTL     uint32 = 3600
+	nxSOASerial     uint32 = 1
+	nxSOARefresh    uint32 = 3600
+	nxSOARetry      uint32 = 600
+	nxSOAExpire     uint32 = 86400
+	nxSOAMboxPrefix        = "hostmaster."
+)
+
+func nxdomainAuthority(name string) []dns.RR {
+	soa := &dns.SOA{Hdr: dns.Header{Name: name, TTL: nxSOANegTTL, Class: dns.ClassINET}}
+	soa.Ns = name
+	soa.Mbox = nxSOAMboxPrefix + name
+	soa.Serial = nxSOASerial
+	soa.Refresh = nxSOARefresh
+	soa.Retry = nxSOARetry
+	soa.Expire = nxSOAExpire
+	soa.Minttl = nxSOANegTTL
+	return []dns.RR{soa}
+}
+
 type Transformer func(*dns.A) (*dns.A, error)
 
 func blackholeTransform(a *dns.A) (*dns.A, error) {
@@ -48,7 +72,8 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 		rcode, served = metrics.RcodeNXDomain, metrics.ServedSuppressed
 		r.Response = true
 		r.Rcode = dns.RcodeNameError
-		r.Answer, r.Ns, r.Extra = nil, nil, nil
+		r.Answer, r.Extra = nil, nil
+		r.Ns = nxdomainAuthority(q.Header().Name)
 		reuseAndWrite(w, r)
 		return
 	}

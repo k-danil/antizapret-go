@@ -99,6 +99,12 @@ func TestDNSHandlerNXDomainSynthesizesNameError(t *testing.T) {
 		require.Truef(t, parsed.Response, "%T: QR bit", q)
 		require.EqualValuesf(t, dns.RcodeNameError, parsed.Rcode, "%T: NXDOMAIN", q)
 		require.Lenf(t, parsed.Answer, 0, "%T: пустой answer", q)
+
+		require.Lenf(t, parsed.Ns, 1, "%T: SOA в authority (негативный кэш)", q)
+		soa, ok := parsed.Ns[0].(*dns.SOA)
+		require.Truef(t, ok, "%T: authority RR — SOA", q)
+		require.Equalf(t, "dns.google.", soa.Hdr.Name, "%T: SOA owner = qname", q)
+		require.NotZerof(t, soa.Minttl, "%T: Minttl задан для негативного кэша", q)
 	}
 }
 
