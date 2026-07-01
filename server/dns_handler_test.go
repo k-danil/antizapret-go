@@ -173,17 +173,15 @@ func TestDNSHandlerServfailOnResolveFailure(t *testing.T) {
 	require.EqualValues(t, 0x4321, parsed.ID, "ID эхо запроса")
 }
 
-func TestRewriteRRSBestEffort(t *testing.T) {
-	s := &Server{}
-
+func TestRemapAnswerBestEffort(t *testing.T) {
 	a := func(name string) *dns.A { return &dns.A{Hdr: dns.Header{Name: name, Class: dns.ClassINET}} }
 
+	// AAAA/SvcParams сюда не доходят (их срезал filterAnswer до кэша) — remapAnswer только A
 	in := []dns.RR{
 		a("ok1."),
 		a("fail."),
 		a("ok2."),
 		&dns.CNAME{Hdr: dns.Header{Name: "cname.", Class: dns.ClassINET}},
-		&dns.AAAA{Hdr: dns.Header{Name: "v6.", Class: dns.ClassINET}},
 	}
 
 	transform := func(rr *dns.A) (*dns.A, error) {
@@ -193,7 +191,7 @@ func TestRewriteRRSBestEffort(t *testing.T) {
 		return rr, nil
 	}
 
-	out, attempted, failed := s.rewriteRRS(in, transform)
+	out, attempted, failed := remapAnswer(in, transform)
 	require.Equal(t, 3, attempted)
 	require.Equal(t, 1, failed)
 
@@ -203,7 +201,6 @@ func TestRewriteRRSBestEffort(t *testing.T) {
 	}
 	require.True(t, names["ok1."] && names["ok2."] && names["cname."], "успешные A и не-A проходят")
 	require.False(t, names["fail."], "незамапленная A пропущена, не отдана")
-	require.False(t, names["v6."], "AAAA вырезана")
 }
 
 func TestStripSvcParams(t *testing.T) {
@@ -222,8 +219,7 @@ func TestStripSvcParams(t *testing.T) {
 	require.Equal(t, only, out2)
 }
 
-func TestRewriteRRSStripsAAAAKeepsSVCBWithoutHints(t *testing.T) {
-	s := &Server{}
+func TestFilterAnswer(t *testing.T) {
 	a := func(name string) dns.RR {
 		rr := &dns.A{}
 		rr.Header().Name, rr.Header().Class = name, dns.ClassINET
@@ -247,9 +243,7 @@ func TestRewriteRRSStripsAAAAKeepsSVCBWithoutHints(t *testing.T) {
 
 	in := []dns.RR{a("a1."), aaaa, https, svc, a("a2.")}
 
-	out, attempted, failed := s.rewriteRRS(in, nil) // passthrough
-	require.Equal(t, 0, attempted)
-	require.Equal(t, 0, failed)
+	out := filterAnswer(in)
 
 	names := map[string]bool{}
 	var gotHTTPS *dns.HTTPS
