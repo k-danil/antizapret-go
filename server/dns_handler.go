@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"time"
 
 	"codeberg.org/miekg/dns"
+	"codeberg.org/miekg/dns/svcb"
 	"github.com/k-danil/antizapret-go/log"
 	"github.com/k-danil/antizapret-go/metrics"
 	"github.com/k-danil/antizapret-go/server/router/matcher"
@@ -14,28 +16,35 @@ import (
 
 var blackholeAddr = netip.AddrFrom4([4]byte{127, 6, 6, 6})
 
-// Синтетический SOA в authority NXDOMAIN-ответа: без него (RFC 2308) резолверы не
-// кэшируют отрицательный ответ и переспрашивают апстрим на каждый запрос. Длительность
-// негативного кэша задают только TTL записи и Minttl; прочие таймеры инертны.
+// Синтетический SOA в authority негативного ответа (NXDOMAIN/NODATA): без него
+// (RFC 2308) резолверы не кэшируют негатив и переспрашивают на каждый запрос.
+// Длительность негативного кэша задают только TTL записи и Minttl; прочие таймеры инертны.
 const (
-	nxSOANegTTL     uint32 = 3600
-	nxSOASerial     uint32 = 1
-	nxSOARefresh    uint32 = 3600
-	nxSOARetry      uint32 = 600
-	nxSOAExpire     uint32 = 86400
-	nxSOAMboxPrefix        = "hostmaster."
+	soaNegTTL     uint32 = 3600
+	soaSerial     uint32 = 1
+	soaRefresh    uint32 = 3600
+	soaRetry      uint32 = 600
+	soaExpire     uint32 = 86400
+	soaMboxPrefix        = "hostmaster."
 )
 
-func nxdomainAuthority(name string) []dns.RR {
-	soa := &dns.SOA{Hdr: dns.Header{Name: name, TTL: nxSOANegTTL, Class: dns.ClassINET}}
+func negativeAuthority(name string) []dns.RR {
+	soa := &dns.SOA{Hdr: dns.Header{Name: name, TTL: soaNegTTL, Class: dns.ClassINET}}
 	soa.Ns = name
-	soa.Mbox = nxSOAMboxPrefix + name
-	soa.Serial = nxSOASerial
-	soa.Refresh = nxSOARefresh
-	soa.Retry = nxSOARetry
-	soa.Expire = nxSOAExpire
-	soa.Minttl = nxSOANegTTL
+	soa.Mbox = soaMboxPrefix + name
+	soa.Serial = soaSerial
+	soa.Refresh = soaRefresh
+	soa.Retry = soaRetry
+	soa.Expire = soaExpire
+	soa.Minttl = soaNegTTL
 	return []dns.RR{soa}
+}
+
+// `_*.arpa` — семейство DDR-имён (`_dns.resolver.arpa`, RFC 9462), через которые
+// клиент находит зашифрованный резолвер сети. Underscore-метка отсекает обычный
+// reverse-DNS (`…in-addr.arpa`, `home.arpa`), который трогать нельзя.
+func isDDRName(domain string) bool {
+	return strings.HasSuffix(domain, ".arpa") && strings.Contains(domain, "_")
 }
 
 type Transformer func(*dns.A) (*dns.A, error)
@@ -73,23 +82,20 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 		r.Response = true
 		r.Rcode = dns.RcodeNameError
 		r.Answer, r.Extra = nil, nil
-		r.Ns = nxdomainAuthority(q.Header().Name)
+		r.Ns = negativeAuthority(q.Header().Name)
 		reuseAndWrite(w, r)
 		return
 	}
 
-	// Для remap/blackhole-доменов глушим HTTPS/SVCB: их подсказки (ipv4hint, ECH)
-	// позволили бы клиенту пойти мимо подмены A-записи. Пустой NODATA заставляет
-	// клиента упасть на A-запрос, который будет подменён.
-	if act == matcher.ActionRemap || act == matcher.ActionBlackhole {
-		if qtype == dns.TypeHTTPS || qtype == dns.TypeSVCB {
-			rcode, served = metrics.RcodeNoError, metrics.ServedSuppressed
-			r.Response = true
-			r.Rcode = dns.RcodeSuccess
-			r.Answer, r.Ns, r.Extra = nil, nil, nil
-			reuseAndWrite(w, r)
-			return
-		}
+	// AAAA → NODATA: гоним всех на IPv4, реальный IPv6 ушёл бы мимо туннеля.
+	if qtype == dns.TypeAAAA || isDDRName(domain) {
+		rcode, served = metrics.RcodeNoError, metrics.ServedSuppressed
+		r.Response = true
+		r.Rcode = dns.RcodeSuccess
+		r.Answer, r.Extra = nil, nil
+		r.Ns = negativeAuthority(q.Header().Name)
+		reuseAndWrite(w, r)
+		return
 	}
 
 	resp, hit := s.cache.GetResponseLambda(r, domain, func() (resp *dns.Msg, ttl time.Duration, err error) {
@@ -145,19 +151,19 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 		}
 	}
 
-	if mapper != nil {
-		var aAtt, aFail, eAtt, eFail int
-		resp.Answer, aAtt, aFail = s.rewriteRRS(resp.Answer, mapper)
-		resp.Extra, eAtt, eFail = s.rewriteRRS(resp.Extra, mapper)
+	// rewriteRRS — на ЛЮБОМ ответе: AAAA и SvcParams чистим и из glue в Extra (MX/NS/SRV),
+	// и из смешанных ответов, мимо которых qtype-замыкание проходит.
+	var aAtt, aFail, eAtt, eFail int
+	resp.Answer, aAtt, aFail = s.rewriteRRS(resp.Answer, mapper)
+	resp.Extra, eAtt, eFail = s.rewriteRRS(resp.Extra, mapper)
 
-		// SERVFAIL только если ни одна A не замапилась (исчерпание пула / сбой firewall):
-		// иначе отдаём частичный ответ, а не пустой NODATA.
-		if att := aAtt + eAtt; att > 0 && aFail+eFail == att {
-			log.L.Warnw("remap failed for all A records", "domain", domain)
-			resp.Rcode = dns.RcodeServerFailure
-			resp.Answer, resp.Ns, resp.Extra = nil, nil, nil
-			resp.Data = nil
-		}
+	// SERVFAIL только если ни одна A не замапилась (исчерпание пула / сбой firewall):
+	// иначе отдаём частичный ответ, а не пустой NODATA.
+	if att := aAtt + eAtt; att > 0 && aFail+eFail == att {
+		log.L.Warnw("remap failed for all A records", "domain", domain)
+		resp.Rcode = dns.RcodeServerFailure
+		resp.Answer, resp.Ns, resp.Extra = nil, nil, nil
+		resp.Data = nil
 	}
 
 	rcode = rcodeLabel(resp.Rcode)
@@ -173,10 +179,17 @@ func reuseAndWrite(w dns.ResponseWriter, m *dns.Msg) {
 }
 
 func (s *Server) rewriteRRS(in []dns.RR, transform Transformer) (out []dns.RR, attempted, failed int) {
+	if transform == nil && !hasStripType(in) {
+		return in, 0, 0 // нечего вырезать — без копии
+	}
 	out = make([]dns.RR, 0, len(in))
 	for _, rr := range in {
 		switch v := rr.(type) {
 		case *dns.A:
+			if transform == nil {
+				out = append(out, rr)
+				continue
+			}
 			attempted++
 			na, err := transform(v)
 			if err != nil {
@@ -189,14 +202,65 @@ func (s *Server) rewriteRRS(in []dns.RR, transform Transformer) (out []dns.RR, a
 				out = append(out, na)
 			}
 		case *dns.AAAA:
-			// remap/blackhole применяются только к A; AAAA убираем, чтобы реальный
-			// IPv6 не утёк мимо туннеля — клиент упадёт на IPv4.
 			continue
+		case *dns.HTTPS:
+			if filtered, changed := stripSvcParams(v.Value); changed {
+				c := *v
+				c.Value = filtered
+				out = append(out, &c)
+			} else {
+				out = append(out, v)
+			}
+		case *dns.SVCB:
+			if filtered, changed := stripSvcParams(v.Value); changed {
+				c := *v
+				c.Value = filtered
+				out = append(out, &c)
+			} else {
+				out = append(out, v)
+			}
 		default:
 			out = append(out, rr)
 		}
 	}
 	return
+}
+
+func isStrippedParam(p svcb.Pair) bool {
+	switch p.(type) {
+	case *svcb.IPV4HINT, *svcb.IPV6HINT, *svcb.DOHPATH:
+		return true
+	}
+	return false
+}
+
+// stripSvcParams убирает из HTTPS/SVCB параметры обхода: ipv4hint/ipv6hint (реальный IP
+// мимо подмены A) и dohpath (анонс DoH-эндпоинта, RFC 9461). alpn/ech и прочее — оставляем.
+func stripSvcParams(in []svcb.Pair) (out []svcb.Pair, changed bool) {
+	for i, p := range in {
+		if !isStrippedParam(p) {
+			continue
+		}
+		out = make([]svcb.Pair, 0, len(in)-1)
+		out = append(out, in[:i]...)
+		for _, q := range in[i+1:] {
+			if !isStrippedParam(q) {
+				out = append(out, q)
+			}
+		}
+		return out, true
+	}
+	return in, false
+}
+
+func hasStripType(rrs []dns.RR) bool {
+	for _, rr := range rrs {
+		switch rr.(type) {
+		case *dns.AAAA, *dns.HTTPS, *dns.SVCB:
+			return true
+		}
+	}
+	return false
 }
 
 func rcodeLabel(rcode uint16) string {
