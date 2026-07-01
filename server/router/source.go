@@ -25,7 +25,7 @@ type Source struct {
 	fetcher     fetcher
 }
 
-func newSource(m cfg.Matcher) (s Source, err error) {
+func newSource(m cfg.Matcher, idx int) (s Source, err error) {
 	s = Source{Name: m.Name, Prune: m.Prune}
 
 	switch m.Type {
@@ -35,6 +35,8 @@ func newSource(m cfg.Matcher) (s Source, err error) {
 		s.Action = matcher.ActionRemap
 	case cfg.RouterTypePassthrough:
 		s.Action = matcher.ActionPass
+	case cfg.RouterTypeNXDomain:
+		s.Action = matcher.ActionNXDomain
 	default:
 		err = fmt.Errorf("unknown router type `%s` for source `%s`", m.Type, m.Name)
 		return
@@ -55,13 +57,16 @@ func newSource(m cfg.Matcher) (s Source, err error) {
 		err = fmt.Errorf("source `%s`: %w", m.Name, err)
 		return
 	}
-	s.Fingerprint = fingerprint(m, subdomains)
+	s.Fingerprint = fingerprint(m, subdomains, idx)
 	return
 }
 
-// action/prune включены намеренно: их смена даёт mismatch → пересборку (иначе skip-merge
-// отдал бы stale при правке type/prune без смены контента).
-func fingerprint(m cfg.Matcher, subdomains bool) string {
+// action/prune/idx включены намеренно: их смена даёт mismatch → пересборку (иначе
+// skip-merge отдал бы stale). idx — позиция в конфиге (приоритет last-wins/prune):
+// ловит реордер/вставку источников на тёплом старте.
+// TODO: idx форсит лишнюю перекачку сдвинутых источников (нужен лишь re-merge) —
+// заменить на build-signature или «первый ребилд всегда мёржит».
+func fingerprint(m cfg.Matcher, subdomains bool, idx int) string {
 	var re string
 	if m.Regexp != nil {
 		re = fmt.Sprintf("%+v", *m.Regexp)
@@ -70,8 +75,8 @@ func fingerprint(m cfg.Matcher, subdomains bool) string {
 	if m.Filter != nil {
 		ex = strings.Join(m.Filter.Exclude, "\x00")
 	}
-	s := fmt.Sprintf("uri=%s\x00fmt=%s\x00sub=%t\x00type=%s\x00prune=%t\x00re=%s\x00ex=%s",
-		m.Source, m.Format, subdomains, m.Type, m.Prune, re, ex)
+	s := fmt.Sprintf("uri=%s\x00fmt=%s\x00sub=%t\x00type=%s\x00prune=%t\x00idx=%d\x00re=%s\x00ex=%s",
+		m.Source, m.Format, subdomains, m.Type, m.Prune, idx, re, ex)
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }

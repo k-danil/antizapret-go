@@ -26,9 +26,9 @@ type matcherBox struct{ matcher.Matcher }
 
 func NewRouter(matchers []cfg.Matcher, st *store.Store, backend cfg.MatcherBackend) (r *Router, err error) {
 	sources := make([]Source, 0, len(matchers))
-	for _, m := range matchers {
+	for i, m := range matchers {
 		var s Source
-		if s, err = newSource(m); err != nil {
+		if s, err = newSource(m, i); err != nil {
 			return
 		}
 		sources = append(sources, s)

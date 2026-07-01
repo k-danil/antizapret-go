@@ -46,6 +46,7 @@ const (
 	RouterTypeBlackhole   RouterType = "blackhole"
 	RouterTypeRemap       RouterType = "remap"
 	RouterTypePassthrough RouterType = "passthrough"
+	RouterTypeNXDomain    RouterType = "nxdomain"
 )
 
 const (
@@ -57,7 +58,7 @@ type Policy struct {
 	ReloadInterval time.Duration  `yaml:"reload_interval" validate:"gt=0"`
 	RebuildTimeout time.Duration  `yaml:"rebuild_timeout" validate:"gt=0"`
 	MatcherBackend MatcherBackend `yaml:"matcher_backend" validate:"omitempty,oneof=radix fst"`
-	Matchers       []Matcher      `yaml:"matchers" validate:"dive"`
+	Matchers       []Matcher      `yaml:"matchers" validate:"unique=Name,dive"`
 }
 
 type MatcherBackend string
@@ -69,7 +70,7 @@ const (
 
 type Matcher struct {
 	Name       string     `yaml:"name" validate:"required"`
-	Type       RouterType `yaml:"type" validate:"required,oneof=blackhole remap passthrough"`
+	Type       RouterType `yaml:"type" validate:"required,oneof=blackhole remap passthrough nxdomain"`
 	Source     string     `yaml:"source" validate:"required,uri"`
 	Format     string     `yaml:"format" validate:"omitempty,oneof=plain regexp"`
 	Subdomains *bool      `yaml:"subdomains"`

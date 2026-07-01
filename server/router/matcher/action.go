@@ -6,6 +6,7 @@ const (
 	ActionBlackhole Action = iota
 	ActionRemap
 	ActionPass
+	ActionNXDomain
 )
 
 func (a Action) String() string {
@@ -16,6 +17,8 @@ func (a Action) String() string {
 		return "blackhole"
 	case ActionPass:
 		return "passthrough"
+	case ActionNXDomain:
+		return "nxdomain"
 	default:
 		return "unknown"
 	}

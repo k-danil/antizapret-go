@@ -12,16 +12,6 @@ import (
 	"github.com/k-danil/antizapret-go/utils"
 )
 
-var blackholeAddr = netip.AddrFrom4([4]byte{127, 6, 6, 6})
-
-type Transformer func(*dns.A) (*dns.A, error)
-
-func blackholeTransform(a *dns.A) (*dns.A, error) {
-	rr := &dns.A{Hdr: a.Hdr}
-	rr.Addr = blackholeAddr
-	return rr, nil
-}
-
 func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg) {
 	served, rcode, action := metrics.ServedCache, metrics.RcodeServFail, metrics.ActionNone
 	if s.metrics.Enabled() {
@@ -44,18 +34,25 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 	act := s.router.Lookup(domain)
 	action = act.String()
 
-	// Для remap/blackhole-доменов глушим HTTPS/SVCB: их подсказки (ipv4hint, ECH)
-	// позволили бы клиенту пойти мимо подмены A-записи. Пустой NODATA заставляет
-	// клиента упасть на A-запрос, который будет подменён.
-	if act == matcher.ActionRemap || act == matcher.ActionBlackhole {
-		if qtype == dns.TypeHTTPS || qtype == dns.TypeSVCB {
-			rcode, served = metrics.RcodeNoError, metrics.ServedSuppressed
-			r.Response = true
-			r.Rcode = dns.RcodeSuccess
-			r.Answer, r.Ns, r.Extra = nil, nil, nil
-			reuseAndWrite(w, r)
-			return
-		}
+	if act == matcher.ActionNXDomain {
+		rcode, served = metrics.RcodeNXDomain, metrics.ServedSuppressed
+		r.Response = true
+		r.Rcode = dns.RcodeNameError
+		r.Answer, r.Extra = nil, nil
+		r.Ns = negativeAuthority(q.Header().Name)
+		reuseAndWrite(w, r)
+		return
+	}
+
+	// AAAA → NODATA: гоним всех на IPv4, реальный IPv6 ушёл бы мимо туннеля.
+	if qtype == dns.TypeAAAA || isDDRName(domain) {
+		rcode, served = metrics.RcodeNoError, metrics.ServedSuppressed
+		r.Response = true
+		r.Rcode = dns.RcodeSuccess
+		r.Answer, r.Extra = nil, nil
+		r.Ns = negativeAuthority(q.Header().Name)
+		reuseAndWrite(w, r)
+		return
 	}
 
 	resp, hit := s.cache.GetResponseLambda(r, domain, func() (resp *dns.Msg, ttl time.Duration, err error) {
@@ -70,6 +67,10 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 			resp = nil // не отдаём запрос как ответ — single-flight расшарил бы его на всех ждущих
 			return
 		}
+		// статический фильтр — ОДИН раз до кэша (идемпотентен); ремап stateful, в хендлере
+		resp.Answer = filterAnswer(resp.Answer)
+		resp.Extra = filterAnswer(resp.Extra)
+		resp.Data = nil // поля изменились — WriteTo должен перепаковать, а не отдать сырой Data
 		return
 	})
 	if !hit {
@@ -113,8 +114,8 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 
 	if mapper != nil {
 		var aAtt, aFail, eAtt, eFail int
-		resp.Answer, aAtt, aFail = s.rewriteRRS(resp.Answer, mapper)
-		resp.Extra, eAtt, eFail = s.rewriteRRS(resp.Extra, mapper)
+		resp.Answer, aAtt, aFail = remapAnswer(resp.Answer, mapper)
+		resp.Extra, eAtt, eFail = remapAnswer(resp.Extra, mapper)
 
 		// SERVFAIL только если ни одна A не замапилась (исчерпание пула / сбой firewall):
 		// иначе отдаём частичный ответ, а не пустой NODATA.
@@ -136,33 +137,6 @@ func (s *Server) DNSHandler(_ context.Context, w dns.ResponseWriter, r *dns.Msg)
 func reuseAndWrite(w dns.ResponseWriter, m *dns.Msg) {
 	m.Data = m.Data[:0]
 	_, _ = m.WriteTo(w)
-}
-
-func (s *Server) rewriteRRS(in []dns.RR, transform Transformer) (out []dns.RR, attempted, failed int) {
-	out = make([]dns.RR, 0, len(in))
-	for _, rr := range in {
-		switch v := rr.(type) {
-		case *dns.A:
-			attempted++
-			na, err := transform(v)
-			if err != nil {
-				// best-effort: незамапленную A пропускаем, остальные отдаём — иначе
-				// уже созданные для этого ответа маппинги осели бы в ядре впустую
-				failed++
-				continue
-			}
-			if na != nil {
-				out = append(out, na)
-			}
-		case *dns.AAAA:
-			// remap/blackhole применяются только к A; AAAA убираем, чтобы реальный
-			// IPv6 не утёк мимо туннеля — клиент упадёт на IPv4.
-			continue
-		default:
-			out = append(out, rr)
-		}
-	}
-	return
 }
 
 func rcodeLabel(rcode uint16) string {

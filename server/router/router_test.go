@@ -242,3 +242,29 @@ func TestRebuildDropsRemovedSource(t *testing.T) {
 	require.Equal(t, matcher.ActionPass, r2.Lookup("b.com"), "removed>0 пересобрал FST без B")
 	require.Equal(t, matcher.ActionRemap, r2.Lookup("a.com"))
 }
+
+// Перестановка источников на тёплом старте меняет приоритет last-wins (idx в fingerprint).
+func TestRebuildReorderFlipsPriority(t *testing.T) {
+	dir := t.TempDir()
+	src := writeList(t, "x.com")
+	mA := cfg.Matcher{Name: "a", Type: cfg.RouterTypeRemap, Source: src, Format: cfg.FormatPlain, Subdomains: new(true)}
+	mB := cfg.Matcher{Name: "b", Type: cfg.RouterTypeBlackhole, Source: src, Format: cfg.FormatPlain, Subdomains: new(true)}
+
+	mk := func(ms ...cfg.Matcher) *Router {
+		s, err := store.New(dir)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+		r, err := NewRouter(ms, s, cfg.MatcherFST)
+		require.NoError(t, err)
+		return r
+	}
+
+	r1 := mk(mA, mB)
+	require.NoError(t, r1.Rebuild(context.Background()))
+	require.Equal(t, matcher.ActionBlackhole, r1.Lookup("x.com"), "B последний → выигрывает")
+
+	r2 := mk(mB, mA) // реордер: теперь последний — A
+	require.Greater(t, r2.LoadCached(), 0, "тёплый старт из FST (старый порядок)")
+	require.NoError(t, r2.Rebuild(context.Background()))
+	require.Equal(t, matcher.ActionRemap, r2.Lookup("x.com"), "после реордера A последний → выигрывает")
+}
