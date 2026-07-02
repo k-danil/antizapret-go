@@ -13,7 +13,7 @@ type Mapping struct {
 
 type Manager interface {
 	Add(m Mapping) error
-	Delete(m Mapping) error
+	Delete(mappings []Mapping) error
 	List() ([]Mapping, error)
 	Close() error
 }
