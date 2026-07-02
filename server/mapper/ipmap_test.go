@@ -36,14 +36,16 @@ func (f *fakeNFT) Add(mp firewall.Mapping) error {
 	return nil
 }
 
-func (f *fakeNFT) Delete(mp firewall.Mapping) error {
+func (f *fakeNFT) Delete(mappings []firewall.Mapping) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.delErr != nil {
 		return f.delErr
 	}
-	f.dels++
-	delete(f.set, utils.IPToUint32(mp.Fake))
+	for _, mp := range mappings {
+		f.dels++
+		delete(f.set, utils.IPToUint32(mp.Fake))
+	}
 	return nil
 }
 
@@ -65,10 +67,10 @@ func (f *fakeNFT) List() ([]firewall.Mapping, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]firewall.Mapping, 0, len(f.set)+len(f.raw))
-	for fake, real := range f.set {
+	for fake, realIP := range f.set {
 		out = append(out, firewall.Mapping{
 			Fake: utils.Uint32ToIP(fake),
-			Real: utils.Uint32ToIP(real),
+			Real: utils.Uint32ToIP(realIP),
 		})
 	}
 	out = append(out, f.raw...)

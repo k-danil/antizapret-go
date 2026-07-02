@@ -68,7 +68,7 @@ func (m *IPMapper) adopt() (err error) {
 		realU := utils.IPToUint32(mp.Real)
 
 		if !m.pool.inRange(fakeU) || m.pool.isAdopted(fakeU) || m.table.has(realU) {
-			if delErr := m.fw.Delete(mp); delErr != nil {
+			if delErr := m.fw.Delete([]firewall.Mapping{mp}); delErr != nil {
 				log.L.Warnw("failed to drop stale mapping on adopt",
 					"fake", mp.Fake, "real", mp.Real, "err", delErr)
 			}
@@ -118,24 +118,28 @@ func (m *IPMapper) Clean() (err error) {
 	m.cleanMu.Lock()
 	defer m.cleanMu.Unlock()
 
-	var errs []error
-	retryFailed := m.teardown(m.pending, &errs)
-	expiredFailed := m.teardown(m.table.expired(m.ttl), &errs)
-	m.pending = append(retryFailed, expiredFailed...)
-
-	if len(errs) > 0 {
-		err = errors.Join(errs...)
-	}
+	items := append(m.pending, m.table.expired(m.ttl)...)
+	m.pending, err = m.teardown(items)
 	return
 }
 
-func (m *IPMapper) teardown(items []pair, errs *[]error) (failed []pair) {
+func (m *IPMapper) teardown(items []pair) (failed []pair, err error) {
+	if len(items) == 0 {
+		return
+	}
+
+	mappings := make([]firewall.Mapping, len(items))
+	for i, p := range items {
+		mappings[i] = firewall.Mapping{Fake: utils.Uint32ToIP(p.fake), Real: utils.Uint32ToIP(p.real)}
+	}
+
+	// батч атомарен: на ошибке удалено 0 → весь срез в pending, пул не трогаем
+	if err = m.fw.Delete(mappings); err != nil {
+		failed = items
+		return
+	}
+
 	for _, p := range items {
-		if delErr := m.fw.Delete(firewall.Mapping{Fake: utils.Uint32ToIP(p.fake), Real: utils.Uint32ToIP(p.real)}); delErr != nil {
-			*errs = append(*errs, delErr)
-			failed = append(failed, p)
-			continue
-		}
 		m.pool.release(p.fake)
 	}
 	return

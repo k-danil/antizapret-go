@@ -3,6 +3,7 @@
 package iptables
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -67,10 +68,15 @@ func (m *Manager) Add(mp firewall.Mapping) error {
 	return m.ipt.AppendUnique(table, m.chain, m.rule(mp.Fake, mp.Real)...)
 }
 
-func (m *Manager) Delete(mp firewall.Mapping) error {
+func (m *Manager) Delete(mappings []firewall.Mapping) (err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.ipt.DeleteIfExists(table, m.chain, m.rule(mp.Fake, mp.Real)...)
+	for _, mp := range mappings {
+		if delErr := m.ipt.DeleteIfExists(table, m.chain, m.rule(mp.Fake, mp.Real)...); delErr != nil {
+			err = errors.Join(err, delErr)
+		}
+	}
+	return
 }
 
 func (m *Manager) List() (out []firewall.Mapping, err error) {

@@ -81,24 +81,68 @@ func (m *Manager) Add(mp firewall.Mapping) (err error) {
 	return
 }
 
-func (m *Manager) Delete(mp firewall.Mapping) (err error) {
+func (m *Manager) Delete(mappings []firewall.Mapping) (err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("failed to delete `%s -> %s` from set: %w", mp.Fake, mp.Real, err)
-		}
-	}()
-
-	if err = m.conn.SetDeleteElements(m.set, []nftables.SetElement{
-		{Key: mp.Fake.To4(), Val: mp.Real.To4()},
-	}); err != nil {
+	if len(mappings) == 0 {
 		return
 	}
 
-	if err = m.conn.Flush(); errors.Is(err, os.ErrNotExist) {
-		err = nil // элемент уже отсутствует — удаление идемпотентно
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("failed to delete %d elements from set: %w", len(mappings), err)
+		}
+	}()
+
+	if err = m.conn.SetDeleteElements(m.set, toSetElements(mappings)); err != nil {
+		return
+	}
+	if err = m.conn.Flush(); err == nil {
+		return
+	}
+	// батч — одна атомарная транзакция: один отсутствующий элемент откатывает весь
+	// Flush, поэтому на ErrNotExist пересобираем батч из реально присутствующих
+	if !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+
+	var existing []nftables.SetElement
+	if existing, err = m.conn.GetSetElements(m.set); err != nil {
+		return
+	}
+	present := intersectPresent(mappings, existing)
+	if len(present) == 0 {
+		return
+	}
+	if err = m.conn.SetDeleteElements(m.set, toSetElements(present)); err != nil {
+		return
+	}
+	err = m.conn.Flush()
+	return
+}
+
+func toSetElements(mappings []firewall.Mapping) (elems []nftables.SetElement) {
+	elems = make([]nftables.SetElement, len(mappings))
+	for i, mp := range mappings {
+		elems[i] = nftables.SetElement{Key: mp.Fake.To4(), Val: mp.Real.To4()}
+	}
+	return
+}
+
+func intersectPresent(mappings []firewall.Mapping, existing []nftables.SetElement) (present []firewall.Mapping) {
+	live := make(map[string]struct{}, len(existing))
+	for _, e := range existing {
+		if k := net.IP(e.Key).To4(); k != nil {
+			live[string(k)] = struct{}{}
+		}
+	}
+	for _, mp := range mappings {
+		if f := mp.Fake.To4(); f != nil {
+			if _, ok := live[string(f)]; ok {
+				present = append(present, mp)
+			}
+		}
 	}
 	return
 }
