@@ -16,6 +16,11 @@ type Upstream interface {
 	Resolve(ctx context.Context, req *dns.Msg) (*dns.Msg, error)
 }
 
+const (
+	schemaUDP = "udp"
+	schemaTCP = "tcp"
+)
+
 type ClassicUpstream struct {
 	name         string
 	client       *dns.Client
@@ -64,6 +69,30 @@ func (r *ClassicUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.
 	}
 	if resp == nil {
 		err = fmt.Errorf("upstream `%s` returned no response", r.name)
+		return
+	}
+
+	if resp.Truncated && strings.HasPrefix(r.schema, schemaUDP) {
+		resp, err = r.retryTCP(ctx, req)
+	}
+
+	return
+}
+
+// client.Exchange при TC-бите TCP-фоллбэка не делает. Копия с Data=nil обязательна:
+// Exchange читает ответ в алиас req.Data, повторная отправка затёртого буфера ушла бы мусором.
+func (r *ClassicUpstream) retryTCP(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
+	tcpReq := req.Copy()
+	tcpReq.Data = nil
+
+	network := strings.Replace(r.schema, schemaUDP, schemaTCP, 1)
+	if resp, _, err = r.client.Exchange(ctx, tcpReq, network, r.host); err != nil {
+		resp = nil
+		err = fmt.Errorf("upstream `%s` tcp retry after truncation failed: %w", r.name, err)
+		return
+	}
+	if resp == nil {
+		err = fmt.Errorf("upstream `%s` returned no response on tcp retry", r.name)
 	}
 
 	return

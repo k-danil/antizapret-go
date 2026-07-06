@@ -43,6 +43,12 @@ func nxResp(name string, soaTTL, soaMin uint32, withSOA bool) *dns.Msg {
 	return m
 }
 
+func truncResp(name string) *dns.Msg {
+	m := aResp(name, dns.RcodeSuccess, 600, true)
+	m.Truncated = true
+	return m
+}
+
 func effectiveTTL(m *dns.Msg) uint32 {
 	if len(m.Answer) > 0 {
 		return m.Answer[0].Header().TTL
@@ -67,6 +73,7 @@ func TestSetResponseCachingRules(t *testing.T) {
 		{"success short ttl cached (clamped up)", aResp("a.test.", dns.RcodeSuccess, 3, true), DefaultTTL, true},
 		{"nxdomain with soa cached (rfc 2308)", nxResp("a.test.", 600, 60, true), DefaultTTL, true},
 		{"nxdomain without soa not cached", nxResp("a.test.", 0, 0, false), DefaultTTL, false},
+		{"truncated not cached", truncResp("a.test."), DefaultTTL, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
