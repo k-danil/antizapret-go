@@ -133,6 +133,10 @@ func (c *Cache) setByKey(resp *dns.Msg, key string, ttl time.Duration) {
 	if resp.Rcode != dns.RcodeSuccess && resp.Rcode != dns.RcodeNameError {
 		return
 	}
+	// TC мимо udp-фоллбэка (напр. tcp://-апстрим): неполный ответ нельзя пиновать на TTL
+	if resp.Truncated {
+		return
+	}
 
 	if ttl == DefaultTTL {
 		if resp.Rcode == dns.RcodeNameError {
