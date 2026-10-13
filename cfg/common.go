@@ -11,12 +11,13 @@ import (
 )
 
 var (
+	BuildVersion   = "0.0.0"
 	BuildCommitSha = "unknown"
 	BuildTimestamp = "unknown"
 )
 
 func ShowVersion() string {
-	return fmt.Sprintf("%s @ %s", BuildCommitSha, BuildTimestamp)
+	return fmt.Sprintf("%s (%s @ %s)", BuildVersion, BuildCommitSha, BuildTimestamp)
 }
 
 func readConfig(configFilename, defaultConfig string, target any) error {

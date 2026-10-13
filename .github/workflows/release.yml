@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+      - name: fmt-check, vet, test, build
+        run: make ci
+      - name: Build artifacts
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            make deb DEB_ARCH="$arch"
+            cp build/antizapret_go "dist/antizapret-go_${version}_linux_${arch}"
+            mv build/*.deb dist/
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          prev="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -z "$prev" ]; then
+            echo "Initial release" > notes.md
+          else
+            {
+              echo "## Changes since ${prev}"
+              echo
+              git log --no-merges --format='- %s' "${prev}..${GITHUB_REF_NAME}"
+            } > notes.md
+          fi
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md

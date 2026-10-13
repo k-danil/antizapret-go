@@ -2,15 +2,19 @@ COMMIT_SHA := $(shell git log -1 --pretty=format:"%h")
 BUILD_TIMESTAMP=$(shell date "+%Y-%m-%d %H:%M:%S")
 BUILD_FLAGS=
 
+# Версия берётся только из тега ровно на HEAD; любая другая сборка — 0.0.0.
+GIT_TAG := $(shell git describe --tags --exact-match 2>/dev/null)
+VERSION ?= $(if $(GIT_TAG),$(patsubst v%,%,$(GIT_TAG)),0.0.0)
+
 # Обычная сборка — под текущую платформу; для кросс-сборки переопредели GOOS/GOARCH.
 GOOS?=$(shell go env GOOS)
 GOARCH?=$(shell go env GOARCH)
 BUILD_ENVS=CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH)
-BUILD_CONSTANTS=-ldflags "-X 'github.com/k-danil/antizapret-go/cfg.BuildCommitSha=$(COMMIT_SHA)' -X 'github.com/k-danil/antizapret-go/cfg.BuildTimestamp=$(BUILD_TIMESTAMP)'"
+BUILD_CONSTANTS=-ldflags "-X 'github.com/k-danil/antizapret-go/cfg.BuildVersion=$(VERSION)' -X 'github.com/k-danil/antizapret-go/cfg.BuildCommitSha=$(COMMIT_SHA)' -X 'github.com/k-danil/antizapret-go/cfg.BuildTimestamp=$(BUILD_TIMESTAMP)'"
 
 # .deb — всегда Linux-пакет; параметризуется только арка (amd64 | arm64 | …).
 DEB_ARCH?=amd64
-DEB_VERSION?=0.0.0~git$(COMMIT_SHA)
+DEB_VERSION?=$(if $(GIT_TAG),$(VERSION),0.0.0~git$(COMMIT_SHA))
 DEB_ENVS=CGO_ENABLED=0 GOOS=linux GOARCH=$(DEB_ARCH)
 
 all: antizapret_go

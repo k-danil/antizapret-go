@@ -89,6 +89,12 @@ make deb                  # → build/antizapret-go_<version>_amd64.deb
 make deb DEB_ARCH=arm64
 ```
 
+## Релизы
+
+На каждый тег `vX.Y.Z` GitHub Actions публикует в Releases бинари для `linux/amd64` и
+`linux/arm64`, `.deb` под те же архитектуры и `SHA256SUMS`. Версия в `-help` берётся
+из тега; у сборки не из тега она `0.0.0`.
+
 ## Запуск
 
 ```sh
