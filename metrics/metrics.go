@@ -92,7 +92,6 @@ func (m *Metrics) Enabled() bool {
 	return m != nil
 }
 
-// StateSource — состояние сервиса для gauge-метрик; методы зовутся на scrape.
 type StateSource interface {
 	Ready() bool
 	ActiveMappings() int
@@ -101,7 +100,7 @@ type StateSource interface {
 }
 
 func (m *Metrics) RegisterState(src StateSource) {
-	m.registerGauge("ready", "1 — сервис готов (radix загружен), иначе 0.", func() float64 {
+	m.registerGauge("ready", "1 — сервис готов (матчер загружен), иначе 0.", func() float64 {
 		if src.Ready() {
 			return 1
 		}

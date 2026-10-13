@@ -14,11 +14,15 @@ const (
 	magic            = "AZRS"
 	formatVersion    = 1
 	preambleLen      = len(magic) + 1
-	sectionHeaderLen = 1 + 4 // type + length(BE u32)
-	recordHeaderLen  = 1 + 2 // mode + keyLen(BE u16)
+	sectionTypeLen   = 1
+	sectionLengthLen = 4
+	sectionHeaderLen = sectionTypeLen + sectionLengthLen
+	recordModeLen    = 1
+	recordKeyLenLen  = 2
+	recordHeaderLen  = recordModeLen + recordKeyLenLen
 )
 
-// Типы секций: 1–15 — поля валидатора (с запасом на новые), 16+ — payload/служебные.
+// номера — on-disk формат: 1–15 резерв под поля валидатора, DATA фиксированно 16
 const (
 	secETag = 1 + iota
 	secLastModified
@@ -80,7 +84,13 @@ func writeValidator(w io.Writer, v Validator) (err error) {
 }
 
 func writeData(w io.Writer, recs []Record) (err error) {
-	slices.SortFunc(recs, func(a, b Record) int { return bytes.Compare(a.Key, b.Key) })
+	slices.SortFunc(recs, func(a, b Record) int {
+		if c := bytes.Compare(a.Key, b.Key); c != 0 {
+			return c
+		}
+		return int(b.Mode) - int(a.Mode)
+	})
+	recs = slices.CompactFunc(recs, func(a, b Record) bool { return bytes.Equal(a.Key, b.Key) })
 
 	dataLen := 0
 	for _, r := range recs {
@@ -128,7 +138,6 @@ func readSectionHeader(br *bufio.Reader) (typ byte, length uint32, err error) {
 	return h[0], binary.BigEndian.Uint32(h[1:]), nil
 }
 
-// readHeader оставляет br на записях DATA; dataLen — их суммарная длина.
 func readHeader(br *bufio.Reader) (v Validator, dataLen uint32, err error) {
 	if err = readPreamble(br); err != nil {
 		return
@@ -163,7 +172,6 @@ func readHeader(br *bufio.Reader) (v Validator, dataLen uint32, err error) {
 		case secFingerprint:
 			v.Fingerprint = string(val)
 		default:
-			// неизвестный type — скип ради forward-compat
 		}
 	}
 }
@@ -187,5 +195,5 @@ func sectionValue(raw []byte, want byte) ([]byte, error) {
 		}
 		p += length
 	}
-	return nil, ErrNotFound
+	return nil, fmt.Errorf("store: section %d missing", want)
 }

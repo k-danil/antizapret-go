@@ -30,6 +30,7 @@ func readConfig(configFilename, defaultConfig string, target any) error {
 		if err != nil {
 			return err
 		}
+		defer func() { _ = cfgFile.Close() }()
 		opts = append(opts, config.Source(cfgFile))
 	}
 

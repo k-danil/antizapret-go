@@ -61,9 +61,7 @@ func newSource(m cfg.Matcher, idx int) (s Source, err error) {
 	return
 }
 
-// action/prune/idx включены намеренно: их смена даёт mismatch → пересборку (иначе
-// skip-merge отдал бы stale). idx — позиция в конфиге (приоритет last-wins/prune):
-// ловит реордер/вставку источников на тёплом старте.
+// type/prune/idx не меняют байты run'а, но без них смена конфига не вызовет ребилд и тёплый старт отдаст устаревший matcher.fst
 // TODO: idx форсит лишнюю перекачку сдвинутых источников (нужен лишь re-merge) —
 // заменить на build-signature или «первый ребилд всегда мёржит».
 func fingerprint(m cfg.Matcher, subdomains bool, idx int) string {
@@ -90,12 +88,11 @@ const (
 	refreshMissing
 )
 
-// На сбое/пустом ответе run не перезаписываем — merge возьмёт прежний (last-known-good).
 func (s *Source) refresh(ctx context.Context, st *store.Store) (refreshResult, error) {
 	prev, lerr := st.LoadValidator(s.Name)
 	cached := lerr == nil
 	if !cached || prev.Fingerprint != s.Fingerprint {
-		prev = store.Validator{} // нет кэша или конфиг источника сменился → полный fetch
+		prev = store.Validator{}
 	}
 
 	res, ferr := s.fetcher.fetch(ctx, prev)

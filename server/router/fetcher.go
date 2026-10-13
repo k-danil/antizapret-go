@@ -121,14 +121,16 @@ func (m multiCloserReader) Close() error {
 	return errors.Join(errs...)
 }
 
+const gzipMagic = "\x1f\x8b"
+
 func maybeGunzip(raw io.ReadCloser) (io.ReadCloser, error) {
 	br := bufio.NewReader(raw)
-	magic, _ := br.Peek(2)
-	if len(magic) < 2 || magic[0] != 0x1f || magic[1] != 0x8b {
+	magic, _ := br.Peek(len(gzipMagic))
+	if string(magic) != gzipMagic {
 		return multiCloserReader{Reader: br, closers: []io.Closer{raw}}, nil
 	}
 
-	gz, err := gzip.NewReader(br)
+	gz, err := gzip.NewReader(br) // именно br, не raw: Peek уже забрал магию в его буфер
 	if err != nil {
 		_ = raw.Close()
 		return nil, fmt.Errorf("gzip: %w", err)

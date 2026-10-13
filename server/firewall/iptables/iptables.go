@@ -5,7 +5,7 @@ package iptables
 import (
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"strings"
 	"sync"
 
@@ -25,7 +25,6 @@ const (
 )
 
 type Manager struct {
-	// сериализует вызовы iptables (xtables-lock + согласованность List с Add/Delete)
 	mu sync.Mutex
 
 	ipt   *goipt.IPTables
@@ -38,7 +37,6 @@ func New(chain, fakeCIDR string) (m *Manager, err error) {
 		return nil, fmt.Errorf("failed to init iptables: %w", err)
 	}
 
-	// существующие правила переживают рестарт и усыновляются маппером
 	var exists bool
 	if exists, err = ipt.ChainExists(table, chain); err != nil {
 		return nil, fmt.Errorf("failed to check chain `%s`: %w", chain, err)
@@ -56,9 +54,7 @@ func New(chain, fakeCIDR string) (m *Manager, err error) {
 	return &Manager{ipt: ipt, chain: chain}, nil
 }
 
-// rule без комментария: iptables -D матчит правило целиком, а Delete домена не знает,
-// поэтому Add и Delete должны строить идентичный rulespec.
-func (m *Manager) rule(fakeIP, realIP net.IP) []string {
+func (m *Manager) rule(fakeIP, realIP netip.Addr) []string {
 	return []string{flagDest, fakeIP.String(), flagJump, targetDNAT, flagToDest, realIP.String()}
 }
 
@@ -112,9 +108,9 @@ func parseDNATRule(rule string) (m firewall.Mapping, ok bool) {
 		}
 	}
 
-	fakeIP := net.ParseIP(fakeStr).To4()
-	realIP := net.ParseIP(realStr).To4()
-	if fakeIP == nil || realIP == nil {
+	fakeIP, fakeErr := netip.ParseAddr(fakeStr)
+	realIP, realErr := netip.ParseAddr(realStr)
+	if fakeErr != nil || realErr != nil || !fakeIP.Is4() || !realIP.Is4() {
 		return
 	}
 	return firewall.Mapping{Fake: fakeIP, Real: realIP}, true

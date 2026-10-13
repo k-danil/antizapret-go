@@ -2,6 +2,7 @@ package matcher
 
 import (
 	"bytes"
+	"slices"
 
 	"github.com/blevesearch/vellum"
 )
@@ -10,7 +11,10 @@ type Matcher interface {
 	Lookup(domain string) Action
 }
 
-const fstPrefixBit = 1 // младший бит значения FST: запись покрывает поддомены (MatchPrefix)
+const (
+	fstPrefixBit   = 1
+	fstActionShift = 1
+)
 
 type radixMatcher struct{ rx *Radix[Action] }
 
@@ -23,26 +27,23 @@ func (m radixMatcher) Lookup(domain string) Action {
 
 type fstMatcher struct{ fst *vellum.FST }
 
-// Lookup воспроизводит longest-suffix-match radix через публичный Get: сначала полный
-// ключ (exact|prefix совпадают), затем родительские метки сверху вниз (их покрывает
-// только prefix-запись). Значение: action<<1 | prefix-бит.
 func (m fstMatcher) Lookup(domain string) Action {
 	rev := ReverseLabels(domain)
 	if v, ok, err := m.fst.Get(rev); err == nil && ok {
-		return Action(v >> 1)
+		return Action(v >> fstActionShift)
 	}
-	for i := len(rev) - 1; i >= 0; i-- {
-		if rev[i] != '.' {
+	for i, c := range slices.Backward(rev) {
+		if c != '.' {
 			continue
 		}
 		if v, ok, err := m.fst.Get(rev[:i]); err == nil && ok && v&fstPrefixBit != 0 {
-			return Action(v >> 1)
+			return Action(v >> fstActionShift)
 		}
 	}
 	return ActionPass
 }
 
-// RunSource: Next выдаёт ключи по возрастанию; позиция в срезе = приоритет
+// RunSource отдаёт через Next ключи по возрастанию; позиция в срезе = приоритет
 // (при равном ключе побеждает больший индекс, его prune действует на меньшие).
 type RunSource struct {
 	Next   func() (key []byte, mode MatchMode, ok bool)
@@ -50,8 +51,6 @@ type RunSource struct {
 	Prune  bool
 }
 
-// mergeResolve сливает источники, разрешая last-wins (больший индекс) и prune: запись
-// отбрасывается, если её по границе меток покрывает prune-префикс приоритетнее.
 func mergeResolve(srcs []RunSource, emit func(key []byte, action Action, mode MatchMode) error) (n int, err error) {
 	type cursor struct {
 		key  []byte
@@ -134,7 +133,7 @@ func BuildFST(srcs []RunSource) (m Matcher, data []byte, n int, err error) {
 		return
 	}
 	n, err = mergeResolve(srcs, func(key []byte, action Action, mode MatchMode) error {
-		v := uint64(action) << 1
+		v := uint64(action) << fstActionShift
 		if mode == MatchPrefix {
 			v |= fstPrefixBit
 		}

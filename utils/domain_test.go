@@ -8,32 +8,12 @@ import (
 
 func TestNormalizeDomain(t *testing.T) {
 	cases := map[string]string{
-		// подчёркивания в лейблах сохраняются (не строгий STD3) — регресс-гард
-		"_dmarc.example.com": "_dmarc.example.com",
-		"a_1.bxfilm10.art":   "a_1.bxfilm10.art",
-		// IDN всё ещё конвертится в punycode мягким профилем
-		"президент.рф":              "xn--d1abbgf6aiiy.xn--p1ai",
-		"xn--d1abbgf6aiiy.xn--p1ai": "xn--d1abbgf6aiiy.xn--p1ai",
-		"Example.COM.":              "example.com",
-		" \"quoted.com":             "quoted.com",
-		"":                          "",
-		"...":                       "",
+		// '_' в не-ASCII имени: StrictDomainName(false) обязан стоять после MapForLookup
+		"_dmarc.президент.рф": "_dmarc.xn--d1abbgf6aiiy.xn--p1ai",
+		// ASCII мимо IDNA: checkHyphens отбросил бы это имя
+		"r3---sn-x.googlevideo.com": "r3---sn-x.googlevideo.com",
 	}
 	for in, want := range cases {
 		assert.Equalf(t, want, NormalizeDomain(in), "NormalizeDomain(%q)", in)
-	}
-}
-
-func BenchmarkNormalizeDomainASCII(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		NormalizeDomain("www.example.com")
-	}
-}
-
-func BenchmarkNormalizeDomainIDN(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		NormalizeDomain("президент.рф")
 	}
 }

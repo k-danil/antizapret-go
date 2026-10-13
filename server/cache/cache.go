@@ -11,11 +11,13 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-const DefaultTTL = time.Duration(0)
+const defaultTTL = time.Duration(0)
 
 const (
-	keySep      = '|'
-	keyExtraLen = 12 // 2 разделителя + до 5+5 цифр type/class
+	keySep          = '|'
+	keySepCount     = 2
+	maxUint16Digits = 5
+	keyExtraLen     = keySepCount + 2*maxUint16Digits
 )
 
 type Cache struct {
@@ -39,14 +41,6 @@ func NewCache(capacity uint64, defaultTTL, minTTL, maxTTL time.Duration) (c *Cac
 	go c.cache.Start()
 
 	return c
-}
-
-func (c *Cache) GetResponse(req *dns.Msg, name string) *dns.Msg {
-	if name == "" || len(req.Question) != 1 {
-		return nil
-	}
-	q := req.Question[0]
-	return c.getByKey(req, cacheKey(name, dns.RRToType(q), q.Header().Class))
 }
 
 func (c *Cache) getByKey(req *dns.Msg, key string) (resp *dns.Msg) {
@@ -87,9 +81,12 @@ func cloneWithTTL(in []dns.RR, ttl uint32) []dns.RR {
 }
 
 func (c *Cache) GetResponseLambda(req *dns.Msg, name string, lambda func() (*dns.Msg, time.Duration, error)) (resp *dns.Msg, hit bool) {
-	// Неключуемое имя коалесцировать нельзя: пустой ключ слил бы все такие запросы в один ответ.
+	// "" — класс неключуемых имён, а не одно имя: коалесценция слила бы разные запросы в один ответ.
 	if name == "" || len(req.Question) != 1 {
-		resp, _, _ = lambda()
+		var err error
+		if resp, _, err = lambda(); err != nil {
+			return nil, false
+		}
 		return resp, false
 	}
 
@@ -102,11 +99,12 @@ func (c *Cache) GetResponseLambda(req *dns.Msg, name string, lambda func() (*dns
 
 	shared, _, _ := c.sf.Do(key, func() (any, error) {
 		r, ttl, err := lambda()
-		if err == nil && r != nil {
-			stored := r.Copy()
-			stored.Data = nil
-			c.setByKey(stored, key, ttl)
+		if err != nil || r == nil {
+			return (*dns.Msg)(nil), nil
 		}
+		stored := r.Copy()
+		stored.Data = nil
+		c.setByKey(stored, key, ttl)
 		return r, nil
 	})
 
@@ -115,33 +113,22 @@ func (c *Cache) GetResponseLambda(req *dns.Msg, name string, lambda func() (*dns
 		return nil, false
 	}
 
-	resp = r.Copy()
+	resp = r.Copy() // r общий для всех ждущих single-flight — каждому своя копия под свой ID
 	resp.Data = nil
 	resp.ID = req.ID
 	return resp, false
-}
-
-func (c *Cache) SetResponse(req, resp *dns.Msg, name string, ttl time.Duration) {
-	if name == "" || len(req.Question) != 1 {
-		return
-	}
-	q := req.Question[0]
-	c.setByKey(resp, cacheKey(name, dns.RRToType(q), q.Header().Class), ttl)
 }
 
 func (c *Cache) setByKey(resp *dns.Msg, key string, ttl time.Duration) {
 	if resp.Rcode != dns.RcodeSuccess && resp.Rcode != dns.RcodeNameError {
 		return
 	}
-	// TC мимо udp-фоллбэка (напр. tcp://-апстрим): неполный ответ нельзя пиновать на TTL
 	if resp.Truncated {
 		return
 	}
 
-	if ttl == DefaultTTL {
+	if ttl == defaultTTL {
 		if resp.Rcode == dns.RcodeNameError {
-			// RFC 2308: негативный TTL = min(TTL заголовка SOA, SOA.MINIMUM);
-			// NXDOMAIN без SOA в authority негативно не кэшируется
 			var soa *dns.SOA
 			for _, rr := range resp.Ns {
 				if s, ok := rr.(*dns.SOA); ok {

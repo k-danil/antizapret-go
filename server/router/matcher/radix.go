@@ -49,16 +49,7 @@ func (n *radixNode[T]) insertChildAt(i int, k byte, ch *radixNode[T]) {
 	n.children[i] = child[T]{key: k, node: ch}
 }
 
-func (r *Radix[T]) Insert(key string, val T, mode MatchMode) {
-	if key == "" {
-		return
-	}
-
-	r.root.insert(ReverseLabels(key), val, mode)
-}
-
-// InsertReversed вставляет уже обращённый ключ, минуя ReverseLabels. Ключ удерживается
-// как prefix узлов — передавай владеемый буфер.
+// InsertReversed удерживает revKey в узлах как prefix без копии — буфер не переиспользовать
 func (r *Radix[T]) InsertReversed(revKey []byte, val T, mode MatchMode) {
 	if len(revKey) == 0 {
 		return
@@ -150,6 +141,8 @@ func (r *Radix[T]) Get(key string) (T, bool) {
 	return r.root.get(b.Bytes(), zero, false)
 }
 
+const childrenLinearScanMax = 8
+
 func (n *radixNode[T]) get(s []byte, bestVal T, bestOk bool) (T, bool) {
 	if len(s) == 0 {
 		if n.match == MatchExact {
@@ -161,7 +154,7 @@ func (n *radixNode[T]) get(s []byte, bestVal T, bestOk bool) (T, bool) {
 	c := s[0]
 	var i int
 	var ok bool
-	if len(n.children) < 8 {
+	if len(n.children) < childrenLinearScanMax {
 		for i = 0; i < len(n.children); i++ {
 			if n.children[i].key == c {
 				ok = true
@@ -216,7 +209,6 @@ func reverseLabelsInto(b *bytes.Buffer, key string) {
 	}
 }
 
-// ReverseLabels отдаёт владеемую копию — Insert сохраняет её как prefix узлов.
 func ReverseLabels(key string) []byte {
 	var b bytes.Buffer
 	b.Grow(len(key))

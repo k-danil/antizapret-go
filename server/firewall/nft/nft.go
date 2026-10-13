@@ -5,7 +5,7 @@ package nft
 import (
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"syscall"
@@ -18,7 +18,7 @@ import (
 const internalNFTMark = `antizapret-go`
 
 type Manager struct {
-	// conn не потокобезопасен: копит батч и шлёт Flush по одному сокету
+	// батч conn общий: без mu чужой Flush отправит или откатит наши элементы
 	mu sync.Mutex
 
 	conn *nftables.Conn
@@ -65,10 +65,11 @@ func (m *Manager) Add(mp firewall.Mapping) (err error) {
 		}
 	}()
 
+	k, v := mp.Fake.As4(), mp.Real.As4()
 	if err = m.conn.SetAddElements(m.set, []nftables.SetElement{
 		{
-			Key: mp.Fake.To4(),
-			Val: mp.Real.To4(),
+			Key: k[:],
+			Val: v[:],
 		},
 	}); err != nil {
 		return
@@ -101,8 +102,7 @@ func (m *Manager) Delete(mappings []firewall.Mapping) (err error) {
 	if err = m.conn.Flush(); err == nil {
 		return
 	}
-	// батч — одна атомарная транзакция: один отсутствующий элемент откатывает весь
-	// Flush, поэтому на ErrNotExist пересобираем батч из реально присутствующих
+	// батч атомарен: один отсутствующий элемент откатывает весь Flush
 	if !errors.Is(err, os.ErrNotExist) {
 		return
 	}
@@ -125,23 +125,22 @@ func (m *Manager) Delete(mappings []firewall.Mapping) (err error) {
 func toSetElements(mappings []firewall.Mapping) (elems []nftables.SetElement) {
 	elems = make([]nftables.SetElement, len(mappings))
 	for i, mp := range mappings {
-		elems[i] = nftables.SetElement{Key: mp.Fake.To4(), Val: mp.Real.To4()}
+		k, v := mp.Fake.As4(), mp.Real.As4()
+		elems[i] = nftables.SetElement{Key: k[:], Val: v[:]}
 	}
 	return
 }
 
 func intersectPresent(mappings []firewall.Mapping, existing []nftables.SetElement) (present []firewall.Mapping) {
-	live := make(map[string]struct{}, len(existing))
+	live := make(map[netip.Addr]struct{}, len(existing))
 	for _, e := range existing {
-		if k := net.IP(e.Key).To4(); k != nil {
-			live[string(k)] = struct{}{}
+		if k, ok := netip.AddrFromSlice(e.Key); ok {
+			live[k.Unmap()] = struct{}{}
 		}
 	}
 	for _, mp := range mappings {
-		if f := mp.Fake.To4(); f != nil {
-			if _, ok := live[string(f)]; ok {
-				present = append(present, mp)
-			}
+		if _, ok := live[mp.Fake]; ok {
+			present = append(present, mp)
 		}
 	}
 	return
@@ -158,10 +157,9 @@ func (m *Manager) List() (out []firewall.Mapping, err error) {
 
 	out = make([]firewall.Mapping, 0, len(elems))
 	for _, e := range elems {
-		out = append(out, firewall.Mapping{
-			Fake: net.IP(e.Key).To4(),
-			Real: net.IP(e.Val).To4(),
-		})
+		k, _ := netip.AddrFromSlice(e.Key)
+		v, _ := netip.AddrFromSlice(e.Val)
+		out = append(out, firewall.Mapping{Fake: k.Unmap(), Real: v.Unmap()})
 	}
 	return
 }
@@ -228,7 +226,6 @@ func (m *Manager) initializeRule(t *nftables.Table, c *nftables.Chain) (err erro
 }
 
 func (m *Manager) initializeSet(name string, t *nftables.Table) (set *nftables.Set, err error) {
-	// существующий набор переживает рестарт и усыновляется маппером
 	if set, _ = m.conn.GetSetByName(t, name); set != nil {
 		return
 	}

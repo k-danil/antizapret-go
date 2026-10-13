@@ -8,7 +8,7 @@ const ServiceName = `antizapret-go`
 
 type Bind struct {
 	Address  string `yaml:"address" validate:"omitempty,ip"`
-	Port     int    `yaml:"port" validate:"min=1,max=65535"`
+	Port     int    `yaml:"port" validate:"port"`
 	Protocol string `yaml:"protocol" validate:"required,oneof=udp tcp"`
 }
 
