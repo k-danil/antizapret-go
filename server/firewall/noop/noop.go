@@ -1,5 +1,3 @@
-// Package noop — DNAT-бэкенд-заглушка: ничего не делает. Применяется как `backend: noop`
-// и как реализация nft/iptables вне Linux, чтобы проект собирался и тестировался везде.
 package noop
 
 import "github.com/k-danil/antizapret-go/server/firewall"

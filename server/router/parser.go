@@ -40,11 +40,15 @@ func newParser(m cfg.Matcher, subdomains bool) (p Parser, err error) {
 	return
 }
 
-const maxLineBytes = 1 << 20 // 1 МиБ: домен ≤255 байт; одна длинная строка не должна обрывать парсинг источника
+// с большим запасом над длиной домена: одна строка длиннее лимита (ErrTooLong) обрывает парсинг всего источника
+const (
+	maxLineBytes       = 1 << 20
+	initialLineBufSize = 64 << 10
+)
 
 func newLineScanner(r io.Reader) *bufio.Scanner {
 	s := bufio.NewScanner(r)
-	s.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	s.Buffer(make([]byte, 0, initialLineBufSize), maxLineBytes)
 	return s
 }
 

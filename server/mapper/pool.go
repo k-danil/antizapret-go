@@ -1,8 +1,7 @@
 package mapper
 
 import (
-	"encoding/binary"
-	"net"
+	"net/netip"
 	"sync"
 
 	"github.com/k-danil/antizapret-go/utils"
@@ -15,6 +14,7 @@ type ipPool struct {
 	cursor    uint32
 	broadcast uint32
 
+	// очередь, не стек: освобождённый fake выдаётся последним, пока его могут помнить клиентские DNS-кэши
 	freed []uint32
 	head  int
 
@@ -22,9 +22,9 @@ type ipPool struct {
 	maxAdopt uint32
 }
 
-func newIPPool(cidr *net.IPNet) *ipPool {
-	network := utils.IPToUint32(cidr.IP)
-	wildcard := ^binary.BigEndian.Uint32(cidr.Mask)
+func newIPPool(prefix netip.Prefix) *ipPool {
+	network := utils.AddrToUint32(prefix.Masked().Addr())
+	wildcard := ^uint32(0) >> prefix.Bits()
 	return &ipPool{
 		network:   network,
 		cursor:    network,
@@ -103,11 +103,14 @@ func (p *ipPool) release(ip uint32) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// сдвигаем живой хвост в начало, иначе backing-массив freed растёт при постоянном churn
+	p.compactFreed()
+	p.freed = append(p.freed, ip)
+}
+
+func (p *ipPool) compactFreed() {
 	if p.head > 0 && p.head >= len(p.freed)-p.head {
 		n := copy(p.freed, p.freed[p.head:])
 		p.freed = p.freed[:n]
 		p.head = 0
 	}
-	p.freed = append(p.freed, ip)
 }

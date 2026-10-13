@@ -79,14 +79,9 @@ func (r *ClassicUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.
 	return
 }
 
-// client.Exchange при TC-бите TCP-фоллбэка не делает. Копия с Data=nil обязательна:
-// Exchange читает ответ в алиас req.Data, повторная отправка затёртого буфера ушла бы мусором.
 func (r *ClassicUpstream) retryTCP(ctx context.Context, req *dns.Msg) (resp *dns.Msg, err error) {
-	tcpReq := req.Copy()
-	tcpReq.Data = nil
-
 	network := strings.Replace(r.schema, schemaUDP, schemaTCP, 1)
-	if resp, _, err = r.client.Exchange(ctx, tcpReq, network, r.host); err != nil {
+	if resp, _, err = r.client.Exchange(ctx, req, network, r.host); err != nil {
 		resp = nil
 		err = fmt.Errorf("upstream `%s` tcp retry after truncation failed: %w", r.name, err)
 		return
@@ -118,6 +113,11 @@ func (r *DoHUpstream) Resolve(ctx context.Context, req *dns.Msg) (resp *dns.Msg,
 	var hresp *http.Response
 	if hresp, err = r.client.Do(hreq.WithContext(ctx)); err != nil {
 		err = fmt.Errorf("upstream `%s` failed: %w", r.name, err)
+		return
+	}
+	if hresp.StatusCode != http.StatusOK {
+		_ = hresp.Body.Close()
+		err = fmt.Errorf("upstream `%s` returned HTTP %d", r.name, hresp.StatusCode)
 		return
 	}
 

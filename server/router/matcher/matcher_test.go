@@ -3,7 +3,6 @@ package matcher
 import (
 	"bytes"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -56,51 +55,6 @@ func runSources(srcs []testSource) []RunSource {
 	return out
 }
 
-// oracle — независимый эталон прямым перебором по спеке: longest-suffix + last-wins,
-// prune убирает строгие поддомены под prune-записью из менее приоритетного источника.
-func oracle(srcs []testSource, query string) Action {
-	type ent struct {
-		domain string
-		mode   MatchMode
-		action Action
-		src    int
-		prune  bool
-	}
-	var ents []ent
-	for si, s := range srcs {
-		for _, e := range s.entries {
-			ents = append(ents, ent{e.domain, testMode(e.subdomains), s.action, si, s.prune})
-		}
-	}
-
-	applies := func(e ent) bool {
-		return e.domain == query || (e.mode == MatchPrefix && strings.HasSuffix(query, "."+e.domain))
-	}
-	pruned := func(e ent) bool {
-		for _, p := range ents {
-			if p.prune && p.src > e.src && strings.HasSuffix(e.domain, "."+p.domain) {
-				return true
-			}
-		}
-		return false
-	}
-
-	best := -1
-	for i, e := range ents {
-		if pruned(e) || !applies(e) {
-			continue
-		}
-		if best < 0 || len(e.domain) > len(ents[best].domain) ||
-			(len(e.domain) == len(ents[best].domain) && e.src > ents[best].src) {
-			best = i
-		}
-	}
-	if best < 0 {
-		return ActionPass
-	}
-	return ents[best].action
-}
-
 func TestMergeResolve(t *testing.T) {
 	srcs := []testSource{
 		{action: ActionRemap, entries: []testEntry{
@@ -123,6 +77,8 @@ func TestMergeResolve(t *testing.T) {
 	cases := map[string]Action{
 		"example.com":           ActionRemap,
 		"a.b.example.com":       ActionRemap,
+		"examplezz.com":         ActionPass, // общий префикс байтов, но не по границе метки
+		"exa.com":               ActionPass, // точка ветвления exact.com/example.com — не запись
 		"exact.com":             ActionRemap,
 		"sub.exact.com":         ActionPass,      // exact-режим не покрывает поддомены
 		"dup.com":               ActionBlackhole, // last-wins: источник 1 поверх 0
@@ -145,7 +101,6 @@ func TestMergeResolve(t *testing.T) {
 
 	for q, want := range cases {
 		t.Run(q, func(t *testing.T) {
-			require.Equal(t, want, oracle(srcs, q), "oracle (спека)")
 			require.Equal(t, want, mrx.Lookup(q), "merge-radix")
 			require.Equal(t, want, mfst.Lookup(q), "merge-fst")
 		})

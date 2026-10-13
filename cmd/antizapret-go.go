@@ -22,10 +22,7 @@ import (
 	"github.com/k-danil/antizapret-go/server/firewall/noop"
 )
 
-const (
-	shutdownTimeout = 5 * time.Second
-	edns0UDPSize    = 1232 // DNS flag day 2020
-)
+const shutdownTimeout = 5 * time.Second
 
 func newFirewall(c cfg.Firewall, fakeCIDR string) (firewall.Manager, error) {
 	switch c.Backend {
@@ -117,11 +114,11 @@ func main() {
 
 	srv.WaitReady(ctx)
 
-	dns.HandleFunc(".", srv.DNSHandler)
+	handler := dns.HandlerFunc(srv.DNSHandler)
 
-	processes := cfg.Antizapret.Processes
-	if processes <= 0 {
-		processes = runtime.NumCPU()
+	listenersPerBinding := cfg.Antizapret.Processes
+	if listenersPerBinding <= 0 {
+		listenersPerBinding = runtime.NumCPU()
 	}
 
 	var servers []*dns.Server
@@ -132,10 +129,8 @@ func main() {
 			log.L.Warnw("DNS server bound to wildcard address; ensure it is not an open resolver",
 				"address", addr, "protocol", protocol)
 		}
-		// несколько листенеров на один адрес — иначе SO_REUSEPORT бессмыслен: с N сокетами
-		// ядро раскидывает приём по ядрам (один сокет = один read-loop).
-		for range processes {
-			dnsServer := &dns.Server{Addr: addr, Net: protocol, ReusePort: true, UDPSize: edns0UDPSize}
+		for range listenersPerBinding {
+			dnsServer := &dns.Server{Addr: addr, Net: protocol, ReusePort: true, UDPSize: server.EDNS0UDPSize, Handler: handler}
 			go func() {
 				if err := dnsServer.ListenAndServe(); err != nil {
 					log.L.Errorw("Error starting DNS server", "addr", addr, "protocol", protocol, "err", err)
@@ -146,15 +141,14 @@ func main() {
 		}
 	}
 	log.L.Infow("DNS listeners started",
-		"bindings", len(cfg.Antizapret.Bindings), "processes_per_binding", processes, "total", len(servers))
+		"bindings", len(cfg.Antizapret.Bindings), "processes_per_binding", listenersPerBinding, "total", len(servers))
 
 	<-ctx.Done()
 	log.L.Infow("Shutting down")
 	shutdownServers(servers)
 }
 
-// dns.Server.Shutdown блокируется до завершения in-flight, но переданный ctx игнорирует —
-// поэтому общий бюджет ожидания дренажа держим сами.
+// dns.Server.Shutdown игнорирует ctx и ждёт все in-flight — таймаут держим сами.
 func shutdownServers(servers []*dns.Server) {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()

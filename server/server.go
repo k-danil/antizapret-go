@@ -70,7 +70,7 @@ func NewServer(cfg cfg.AntizapretConfig, fw firewall.Manager, m *metrics.Metrics
 
 func (s *Server) PolicyRebuilder(ctx context.Context, interval time.Duration, reload <-chan os.Signal) {
 	s.rebuild(ctx)
-	close(s.rebuildReady) // разблокирует WaitReady на холодном старте
+	close(s.rebuildReady)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -102,13 +102,10 @@ func (s *Server) rebuild(ctx context.Context) {
 		log.L.Errorw("failed to rebuild router", "err", err)
 	}
 
-	// Rebuild оставляет мёртвыми парс-скрэтч источников, старый FST и буфер его сборки;
-	// сразу возвращаем страницы ОС — иначе scavenger тянет это медленно, RSS висит.
+	// Ребилд оставляет крупный мусор (скрэтч источников, старый матчер); scavenger отдаёт его ОС слишком медленно.
 	debug.FreeOSMemory()
 }
 
-// WaitReady блокирует выдачу на холодном старте до первого rebuild (bounded его
-// таймаутом, отменяемо через ctx). Тёплый старт обслуживает из кэша сразу.
 func (s *Server) WaitReady(ctx context.Context) {
 	if s.warm {
 		return

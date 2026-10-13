@@ -39,21 +39,21 @@ func (t *mappingTable) set(real, fake uint32) {
 	e.lastSeen.Store(time.Now().UnixNano())
 
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.m[real] = e
-	t.mu.Unlock()
 }
 
 func (t *mappingTable) has(real uint32) (ok bool) {
 	t.mu.RLock()
+	defer t.mu.RUnlock()
 	_, ok = t.m[real]
-	t.mu.RUnlock()
 	return
 }
 
 func (t *mappingTable) Len() (n int) {
 	t.mu.RLock()
+	defer t.mu.RUnlock()
 	n = len(t.m)
-	t.mu.RUnlock()
 	return
 }
 
@@ -63,10 +63,10 @@ func (t *mappingTable) expired(ttl time.Duration) (out []pair) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	for real, e := range t.m {
+	for realU, e := range t.m {
 		if e.lastSeen.Load() <= cutoff {
-			out = append(out, pair{real: real, fake: e.fake})
-			delete(t.m, real)
+			out = append(out, pair{real: realU, fake: e.fake})
+			delete(t.m, realU)
 		}
 	}
 	return

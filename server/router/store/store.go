@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,8 +19,6 @@ const (
 	fstName    = "matcher.fst"
 )
 
-var ErrNotFound = errors.New("not found")
-
 type Validator struct {
 	ETag         string
 	LastModified string
@@ -32,7 +29,7 @@ type Validator struct {
 
 type Record struct {
 	Key  []byte
-	Mode byte
+	Mode byte // matcher.MatchMode: больший режим покрывает меньший, при дубле ключа writeData оставляет его
 }
 
 type Store struct {
@@ -74,19 +71,22 @@ func sanitize(name string) string {
 }
 
 func (s *Store) cleanTemps() {
-	entries, err := os.ReadDir(s.runsDir)
+	removeTemps(s.runsDir)
+	removeTemps(s.dir)
+}
+
+func removeTemps(dir string) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), tmpSuffix) {
-			_ = os.Remove(filepath.Join(s.runsDir, e.Name()))
+			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
-	_ = os.Remove(filepath.Join(s.dir, fstName+tmpSuffix))
 }
 
-// temp в той же дире — rename атомарен лишь внутри одной ФС.
 func writeAtomic(path string, write func(io.Writer) error) (err error) {
 	var tmp *os.File
 	if tmp, err = os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*"+tmpSuffix); err != nil {
@@ -138,9 +138,6 @@ type RunReader struct {
 func (s *Store) OpenRun(name string) (v Validator, r *RunReader, err error) {
 	var f *os.File
 	if f, err = os.Open(filepath.Join(s.runsDir, runFile(name))); err != nil {
-		if os.IsNotExist(err) {
-			err = ErrNotFound
-		}
 		return
 	}
 
@@ -184,9 +181,6 @@ func (r *RunReader) Close() error { return r.f.Close() }
 func (s *Store) LoadValidator(name string) (v Validator, err error) {
 	var f *os.File
 	if f, err = os.Open(filepath.Join(s.runsDir, runFile(name))); err != nil {
-		if os.IsNotExist(err) {
-			err = ErrNotFound
-		}
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -197,9 +191,6 @@ func (s *Store) LoadValidator(name string) (v Validator, err error) {
 func (s *Store) LoadFST() (data []byte, err error) {
 	var raw []byte
 	if raw, err = os.ReadFile(filepath.Join(s.dir, fstName)); err != nil {
-		if os.IsNotExist(err) {
-			err = ErrNotFound
-		}
 		return
 	}
 	return sectionValue(raw, secData)

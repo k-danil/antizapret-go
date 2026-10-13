@@ -7,8 +7,7 @@ import (
 	"golang.org/x/net/idna"
 )
 
-// idna.Lookup, но с разрешёнными '_' в лейблах: подчёркивания валидны в DNS
-// (_dmarc, _mta-sts, SRV-записи, реальные поддомены), а строгий STD3 их режет.
+// StrictDomainName(false) строго после MapForLookup (тот включает STD3) — иначе '_' в не-ASCII именах режется
 var lookupProfile = idna.New(
 	idna.MapForLookup(),
 	idna.BidiRule(),
@@ -28,7 +27,8 @@ func NormalizeDomain(s string) string {
 		return ""
 	}
 	if isASCII(s) {
-		// чистый ASCII совпадает с выводом ToASCII — IDNA-преобразование пропускаем
+		// ASCII мимо IDNA намеренно: checkHyphens отбросил бы реальные имена (r3---sn-….googlevideo.com),
+		// а битая xn--метка просто не совпадёт
 		return s
 	}
 	ascii, err := lookupProfile.ToASCII(s)

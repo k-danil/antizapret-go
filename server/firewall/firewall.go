@@ -1,18 +1,15 @@
-// Package firewall описывает контракт DNAT-бэкенда (fake → real). Реализации —
-// в подпакетах nft, iptables и noop; выбор бэкенда делает слой wiring (cmd). Пакет
-// намеренно не импортирует реализации, чтобы потребители интерфейса (server)
-// не тянули Linux-only зависимости и оставались кросс-платформенно тестируемыми.
 package firewall
 
-import "net"
+import "net/netip"
 
 type Mapping struct {
-	Fake net.IP
-	Real net.IP
+	Fake netip.Addr
+	Real netip.Addr
 }
 
 type Manager interface {
 	Add(m Mapping) error
+	// Delete идемпотентен: отсутствующий маппинг не ошибка — Clean повторяет весь срез после сбоя.
 	Delete(mappings []Mapping) error
 	List() ([]Mapping, error)
 	Close() error

@@ -3,10 +3,11 @@ package log
 import (
 	"errors"
 	"fmt"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"os"
 	"syscall"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -25,14 +26,6 @@ func init() {
 		level,
 	))
 	L = Logger.Sugar()
-}
-
-func SetDebug(debug bool) {
-	if debug {
-		level.SetLevel(zap.DebugLevel)
-	} else {
-		level.SetLevel(zap.InfoLevel)
-	}
 }
 
 func SetSeverity(severity string) error {
